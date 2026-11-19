@@ -1,4 +1,5 @@
 import { calculateShift } from '@/engine/calculate';
+import { userEarnings } from '@/lib/earnings';
 import { buildShareText } from '@/lib/format';
 import { buildShiftInput, selectProfile, teamRolesFor, useShiftStore } from '@/store/shiftStore';
 
@@ -25,12 +26,16 @@ describe('shift store (in-memory)', () => {
     expect(input.team[3]!.name).toBe('Barback 2');
 
     const { result } = calculateShift(input, profile);
-    expect(result.pool).toBe(10200);
+    expect(result.pool).toBe(10100);
 
     const text = buildShareText(input, result);
-    expect(text).toContain('Total tip-out: $102.00');
+    expect(text).toContain('Total tip-out: $101.00');
     expect(text).toContain('Bartenders: $44.00 — Joseph $22.00, Aaron $22.00');
-    expect(text).toContain('I keep: $238.56');
+    expect(text).toContain(
+      'Barbacks: $32.00 ($1.00 kept back — tied hours) — David $16.00, Barback 2 $16.00',
+    );
+    expect(text).toContain('I keep: $239.56');
+    expect(userEarnings(input, result)).toBe(23956);
   });
 
   it('switching to the bartender profile adds the user as a bartender', () => {
@@ -58,9 +63,13 @@ describe('shift store (in-memory)', () => {
     const input = buildShiftInput(state.draft, profile);
     const { result } = calculateShift(input, profile);
     const text = buildShareText(input, result);
-    expect(text).toContain('Bar keeps: $149.00');
+    expect(text).toContain('Bar keeps: $150.00');
     expect(text).toContain('  Me $75.00');
-    expect(text).toContain('  Aaron $74.00');
+    expect(text).toContain('  Aaron $75.00');
+    expect(text).toContain('Barbacks: $40.00 ($1.00 kept back — tied hours)');
+    // The auto-added "Me" is the user: own share + the change (owner Q9).
+    expect(state.draft.team.find((m) => m.name === 'Me')!.isUser).toBe(true);
+    expect(userEarnings(input, result)).toBe(7555);
     expect(text).toContain('($0.55 in change left over — stays with whoever closes out.)');
     expect(text).toContain('Hosts: nobody on shift ($14.00 kept)');
   });

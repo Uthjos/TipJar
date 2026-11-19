@@ -38,9 +38,19 @@ export function hasChangeNote(result: ShiftResult): boolean {
   return !!result.keptSplit && result.keptSplit.length > 0 && result.keptChange > 0;
 }
 
-/** Note for the bar's leftover change, e.g. "$0.55 in change left over — stays with whoever closes out." */
-export function changeNote(keptChange: number): string {
-  return `${formatCents(keptChange)} in change left over — stays with whoever closes out.`;
+/**
+ * Note for the bar's leftover change, e.g. "$0.55 in change left over — stays with whoever closes
+ * out." When the tie rule held dollars back from the bartenders' split (`keptHeldBack`), says so:
+ * "$1.55 in change left over ($1.00 from tied hours) — …".
+ */
+export function changeNote(keptChange: number, keptHeldBack = 0): string {
+  const held = keptHeldBack > 0 ? ` (${formatCents(keptHeldBack)} from tied hours)` : '';
+  return `${formatCents(keptChange)} in change left over${held} — stays with whoever closes out.`;
+}
+
+/** Explains dollars held back from a role by the odd-dollar tie rule, e.g. "$1.00 kept back — tied hours". */
+export function heldBackNote(heldBack: number): string {
+  return `${formatCents(heldBack)} kept back — tied hours`;
 }
 
 /** Plain-text summary to paste into a group chat. */
@@ -61,12 +71,17 @@ export function buildShareText(input: ShiftInput, result: ShiftResult): string {
       continue;
     }
     const members = r.members.map((m) => `${m.name} ${formatCents(m.amount)}`).join(', ');
-    lines.push(`${roleLabel(r.role)}: ${formatCents(r.amount)}${members ? ` — ${members}` : ''}`);
+    const held = r.heldBack ? ` (${heldBackNote(r.heldBack)})` : '';
+    lines.push(
+      `${roleLabel(r.role)}: ${formatCents(r.amount)}${held}${members ? ` — ${members}` : ''}`,
+    );
   }
   if (input.userRole === 'bartender') {
     lines.push(`Bar keeps: ${formatCents(keptShown(result))}`);
     for (const k of result.keptSplit ?? []) lines.push(`  ${k.name} ${formatCents(k.amount)}`);
-    if (hasChangeNote(result)) lines.push(`(${changeNote(result.keptChange)})`);
+    if (hasChangeNote(result)) {
+      lines.push(`(${changeNote(result.keptChange, result.keptHeldBack)})`);
+    }
   } else {
     lines.push(`I keep: ${formatCents(result.kept)}`);
   }

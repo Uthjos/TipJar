@@ -14,8 +14,10 @@ import {
   formatPercent,
   formatShiftDate,
   hasChangeNote,
+  heldBackNote,
   keptShown as keptShownFor,
 } from '@/lib/format';
+import { userEarnings, userKeptEntry } from '@/lib/earnings';
 import { buildShiftInput, selectProfile, useShiftStore } from '@/store/shiftStore';
 import { font, MIN_TAP, spacing, useColors } from '@/theme';
 
@@ -84,6 +86,7 @@ function RoleRow({
             {formatPercent(role.percentOfTips)} of tips · {formatPercent(role.percentOfNetSales, 2)}{' '}
             of sales
           </Muted>
+          {role.heldBack ? <Muted>{heldBackNote(role.heldBack)}</Muted> : null}
         </View>
         <Text style={[styles.amount, { color: c.text }]}>{formatCents(role.amount)}</Text>
       </Pressable>
@@ -137,6 +140,9 @@ export default function ResultsScreen() {
   const shareText = buildShareText(input, result);
   // Bartender flow with whole-dollar rounding: the headline is the whole dollars actually shared.
   const keptShown = keptShownFor(result);
+  // Bartender flow: the user's own share (their keptSplit amount + the change), owner Q9.
+  const mine = userKeptEntry(input, result);
+  const earnings = userEarnings(input, result);
 
   const onShare = async () => {
     try {
@@ -197,17 +203,37 @@ export default function ResultsScreen() {
         {isBartender && result.keptSplit && result.keptSplit.length > 0
           ? result.keptSplit.map((k) => (
               <View key={k.memberId} style={styles.memberRow}>
-                <Body style={{ flex: 1 }}>{k.name}</Body>
+                <Body style={{ flex: 1 }}>
+                  {k.name}
+                  {k.memberId === mine?.memberId ? <Muted> (you)</Muted> : null}
+                </Body>
                 <Body style={{ fontWeight: '600' }}>{formatCents(k.amount)}</Body>
               </View>
             ))
           : null}
+        {mine ? (
+          <View
+            style={styles.memberRow}
+            accessible
+            accessibilityLabel={`Your share ${formatCents(earnings)}`}
+          >
+            <Body style={{ flex: 1, fontWeight: '700' }}>
+              Your share
+              {result.keptChange > 0 ? (
+                <Muted> (incl. {formatCents(result.keptChange)} change)</Muted>
+              ) : null}
+            </Body>
+            <Body style={{ fontWeight: '700' }}>{formatCents(earnings)}</Body>
+          </View>
+        ) : null}
         {isBartender && (!result.keptSplit || result.keptSplit.length === 0) ? (
           <Banner kind="info">
             Add the bartenders on shift (including you) to split what the bar keeps.
           </Banner>
         ) : null}
-        {hasChangeNote(result) ? <Muted>{changeNote(result.keptChange)}</Muted> : null}
+        {hasChangeNote(result) ? (
+          <Muted>{changeNote(result.keptChange, result.keptHeldBack)}</Muted>
+        ) : null}
         {result.roundingAdjustment > 0 ? (
           <Muted>
             Rounded down to the dollar — {formatCents(result.roundingAdjustment)} stays with{' '}
@@ -222,7 +248,8 @@ export default function ResultsScreen() {
       </Card>
 
       {warnings.map((w) => (
-        <Banner key={w.code} kind="warning">
+        // $0 shares are allowed (owner Q8): shown as an informational note, not a warning.
+        <Banner key={w.code} kind={w.code === 'ZERO_SHARE_AFTER_ROUNDING' ? 'info' : 'warning'}>
           {w.message}
         </Banner>
       ))}

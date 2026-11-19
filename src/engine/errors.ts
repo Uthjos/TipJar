@@ -35,6 +35,8 @@ export class EngineValidationError extends Error {
  * - UNUSED_TEAM_MEMBERS: team members whose role the profile doesn't tip out (they get nothing).
  * - PROFILE_ROLE_MISMATCH: profile.appliesTo differs from input.userRole.
  * - POOL_EXCEEDS_TIPS: a sales-based pool (profile.poolBasis) came to more than total tips; capped.
+ * - ZERO_SHARE_AFTER_ROUNDING: named members (or bartenders sharing kept tips) whose whole-dollar
+ *   share is $0 (owner Q8). Allowed; shown as a note on Results.
  * At most one warning per code is returned.
  */
 export type EngineWarningCode =
@@ -43,6 +45,7 @@ export type EngineWarningCode =
   | 'NO_REDISTRIBUTION_RECIPIENTS'
   | 'UNUSED_TEAM_MEMBERS'
   | 'PROFILE_ROLE_MISMATCH'
-  | 'POOL_EXCEEDS_TIPS';
+  | 'POOL_EXCEEDS_TIPS'
+  | 'ZERO_SHARE_AFTER_ROUNDING';
 
 export type EngineWarning = { code: EngineWarningCode; message: string };

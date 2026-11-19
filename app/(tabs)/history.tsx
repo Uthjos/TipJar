@@ -2,7 +2,8 @@ import { View } from 'react-native';
 
 import { Body, Card, Muted, Screen, Title } from '@/components/ui';
 import { formatCents } from '@/engine/money';
-import { formatShiftDate, keptShown } from '@/lib/format';
+import { userEarnings } from '@/lib/earnings';
+import { formatShiftDate } from '@/lib/format';
 import { useShiftStore } from '@/store/shiftStore';
 import { spacing } from '@/theme';
 
@@ -28,8 +29,9 @@ export default function HistoryScreen() {
               style={{ flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md }}
             >
               <Muted>Tipped out {formatCents(s.result.pool)}</Muted>
-              {/* Same figure as the Results headline (whole dollars shared in the bartender flow). */}
-              <Muted>Kept {formatCents(keptShown(s.result))}</Muted>
+              {/* The user's own earnings (owner Q9): server keeps `kept`; bartender = own
+                  share + change. */}
+              <Muted>You earned {formatCents(userEarnings(s.input, s.result))}</Muted>
             </View>
           </Card>
         ))

@@ -44,8 +44,10 @@ describe('manual flow screens', () => {
   it('Results shows the tip-out and the missing-role toggle', async () => {
     seedGolden();
     await render(<ResultsScreen />);
-    // No host on shift and 'retain' by default: $102 pool less the host's $11 kept.
-    expect(screen.getByText('$91.00')).toBeTruthy();
+    // No host on shift and 'retain' by default: $102 pool less the host's $11 kept, less the
+    // barbacks' odd $1 held back on tied hours.
+    expect(screen.getByText('$90.00')).toBeTruthy();
+    expect(screen.getByText('$1.00 kept back — tied hours')).toBeTruthy();
     expect(screen.getByText('Nobody on shift')).toBeTruthy();
     // Defaults to keeping the missing share (owner Q3).
     expect(useShiftStore.getState().draft.missingRoleHandling).toBe('retain');
@@ -64,11 +66,11 @@ describe('manual flow screens', () => {
     s.addMember('barback', 'David');
     s.addMember('barback', 'Allen');
     await render(<ResultsScreen />);
-    expect(screen.getByLabelText('Bar keeps $149.00')).toBeTruthy();
+    expect(screen.getByLabelText('Bar keeps $150.00')).toBeTruthy();
     expect(
       screen.getByText('$0.55 in change left over — stays with whoever closes out.'),
     ).toBeTruthy();
-    expect(screen.getByText('$75.00')).toBeTruthy();
-    expect(screen.getByText('$74.00')).toBeTruthy();
+    expect(screen.getAllByText('$75.00')).toHaveLength(2);
+    expect(screen.getByLabelText('Your share $75.55')).toBeTruthy();
   });
 });

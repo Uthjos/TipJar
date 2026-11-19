@@ -82,7 +82,7 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
       let team = s.draft.team;
       // Bartender flow: the user shares the bar's kept tips, so make sure they're listed.
       if (profile?.appliesTo === 'bartender' && !team.some((m) => m.role === 'bartender')) {
-        team = [{ id: newId(), name: 'Me', role: 'bartender' }, ...team];
+        team = [{ id: newId(), name: 'Me', role: 'bartender', isUser: true }, ...team];
       }
       return { draft: { ...s.draft, profileId, team } };
     }),
