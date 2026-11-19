@@ -104,8 +104,9 @@ export interface ShiftResult {
   /** Bartender flow: kept tips split among the bartenders on shift. */
   keptSplit?: KeptSplitEntry[];
   /**
-   * Bartender flow with whole-dollar rounding: cents of `kept` not shared out
-   * (kept - sum(keptSplit)); stays with whoever closes out. 0 otherwise.
+   * Bartender flow: `kept - sum(keptSplit)`, the part of `kept` not shared out; stays with
+   * whoever closes out. Under $1 with whole-dollar rounding, 0 when splitting to the cent, and
+   * all of `kept` when no bartenders are listed (keptSplit []). Always 0 in the server flow.
    */
   keptChange: Cents;
   /** Share of absent roles kept back (missingRoleHandling = 'retain'). */

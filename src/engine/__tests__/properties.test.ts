@@ -256,6 +256,8 @@ describe('calculateShift properties', () => {
     );
   });
 
+  // Precondition: the generator always lists >= 1 bartender in the bartender flow. With none,
+  // keptChange = kept (review round 2, #20); covered in review.test.ts.
   it('0 <= keptChange < 100; it is kept % 100 with whole-dollar shares, else 0', () => {
     fc.assert(
       fc.property(caseArb, (c) => {

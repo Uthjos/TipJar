@@ -26,10 +26,10 @@ export function member(
 }
 
 /**
- * Build a ShiftInput with sensible defaults (server flow, rounding off, redistribute).
- * Note: the app's store now defaults missingRoleHandling to 'retain' (owner Q3), but the engine
- * always receives it explicitly; this builder keeps 'redistribute' so existing hand-worked
- * expectations stay valid. Tests that depend on it pass it explicitly where it matters.
+ * Build a ShiftInput with sensible defaults (server flow, rounding off, retain).
+ * missingRoleHandling defaults to 'retain' to mirror the store default (owner Q3; review
+ * round 2, finding #30). Every test with an unstaffed role passes it explicitly, so the flip
+ * changed no expectation.
  */
 export function shiftInput(overrides: Partial<ShiftInput> = {}): ShiftInput {
   return {
@@ -39,7 +39,7 @@ export function shiftInput(overrides: Partial<ShiftInput> = {}): ShiftInput {
     netSales: 0,
     foodSales: 0,
     team: [],
-    missingRoleHandling: 'redistribute',
+    missingRoleHandling: 'retain',
     profileId: overrides.userRole === 'bartender' ? 'bartender-default' : 'server-default',
     roundToDollar: false,
     ...overrides,

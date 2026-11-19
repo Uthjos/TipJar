@@ -184,7 +184,9 @@ function basisValue(
  * - `kept = totalTips - pool` (includes `retained` and `roundingAdjustment`).
  * - `roundingAdjustment` = unrounded (capped) pool (to the cent) - floored pool; 0 when rounding
  *   is off.
- * - `keptChange` = kept - sum(keptSplit) in the bartender flow with whole-dollar rounding; else 0.
+ * - `keptChange` = kept - sum(keptSplit) in the bartender flow (the cents left after the
+ *   whole-dollar split, 0 when splitting to the cent, or all of kept when no bartenders are
+ *   listed); always 0 in the server flow.
  * - Missing roles ('retain'): listed with their computed amount, `missing: true`, no members;
  *   the amount is in `retained`, not `pool`.
  * - Missing roles ('redistribute'): listed with amount 0, `missing: true`; their share goes to
@@ -440,7 +442,11 @@ export function calculateShift(
         amount: parts[i]!,
       }));
     } else {
+      // No bartenders listed: nothing is shared, so all of kept is unshared "change" and
+      // sum(keptSplit) + keptChange == kept still holds (review round 2, finding #20).
+      // The Results screen prompts the user to add bartenders in this case.
       keptSplit = [];
+      keptChange = kept;
     }
   }
 

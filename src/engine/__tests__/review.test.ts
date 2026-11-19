@@ -208,3 +208,53 @@ describe('review: validation gaps (#14)', () => {
     expect(formatCents(-1234)).toBe('-$12.34');
   });
 });
+
+describe('review round 2: keptChange with no bartenders listed (#20)', () => {
+  // Bartender default, no bartenders on the team, barbacks + host staffed.
+  // Tips $192.55 -> pool 5777 -> floor $57; kept = 19255 - 5700 = 13555.
+  const team = [
+    member('David', 'barback', { id: 'david' }),
+    member('Allen', 'barback', { id: 'allen' }),
+    member('Hannah', 'host', { id: 'hannah' }),
+  ];
+  it.each([true, false])(
+    'keptSplit is [] and keptChange = kept, so sum(keptSplit) + keptChange == kept (rounding %p)',
+    (roundToDollar) => {
+      const input = shiftInput({
+        userRole: 'bartender',
+        totalTips: 19255,
+        netSales: 90543,
+        foodSales: 12000,
+        roundToDollar,
+        team,
+      });
+      const { result } = calculateShift(input, BARTENDER_DEFAULT_PROFILE);
+      expect(result.keptSplit).toEqual([]);
+      expect(result.keptChange).toBe(result.kept);
+      expect(result.kept + result.pool).toBe(19255);
+      if (roundToDollar) expect(result.kept).toBe(13555);
+    },
+  );
+});
+
+describe('review round 2: POOL_EXCEEDS_TIPS compares the exact pool (#24)', () => {
+  it('warns when basis x % is over total tips by less than half a cent', () => {
+    // 5% x 400001c net = 20000.05c > 20000c tips -> warns, pool capped at 20000.
+    const profile: TipOutProfile = {
+      id: 'sales',
+      name: 'Sales pool',
+      appliesTo: 'server',
+      totalTipOutPercentOfTips: 5,
+      poolBasis: 'netSales',
+      rules: [{ role: 'bartender', type: 'shareOfRemainder', weight: 1 }],
+    };
+    const input = shiftInput({
+      totalTips: 20000,
+      netSales: 400001,
+      team: [member('Joseph', 'bartender')],
+    });
+    const { result, warnings } = calculateShift(input, profile);
+    expect(warnings.map((w) => w.code)).toContain('POOL_EXCEEDS_TIPS');
+    expect(result.pool).toBe(20000);
+  });
+});
