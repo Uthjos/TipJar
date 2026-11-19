@@ -38,6 +38,8 @@ export interface TeamMember {
   clockIn?: string;
   /** ISO datetime (or "HH:mm"). Shifts past midnight are handled. */
   clockOut?: string;
+  /** True for the app's user ("Me"); used by History to attribute earnings (owner Q9). */
+  isUser?: boolean;
 }
 
 export type Basis = 'foodSales' | 'netSales' | 'totalTips';
@@ -84,6 +86,11 @@ export interface RoleResult {
   members: MemberResult[];
   /** True when the role had nobody on shift. Kitchen is never missing. */
   missing?: boolean;
+  /**
+   * Whole dollars of this role's share held back by the odd-dollar tie rule (owner Q7); already
+   * subtracted from `amount` and counted in `roundingAdjustment`. Set only when > 0.
+   */
+  heldBack?: Cents;
 }
 
 export interface KeptSplitEntry {
@@ -109,9 +116,17 @@ export interface ShiftResult {
    * all of `kept` when no bartenders are listed (keptSplit []). Always 0 in the server flow.
    */
   keptChange: Cents;
+  /**
+   * Whole dollars of the bar's kept tips held back from `keptSplit` by the odd-dollar tie rule
+   * (owner Q7); already included in `keptChange`. Set only when > 0.
+   */
+  keptHeldBack?: Cents;
   /** Share of absent roles kept back (missingRoleHandling = 'retain'). */
   retained: Cents;
   roles: RoleResult[];
-  /** How much rounding kept back (>= 0). */
+  /**
+   * How much rounding kept back (>= 0): pool cents trimmed by the floor + odd dollars held back
+   * from role splits (§5.4).
+   */
   roundingAdjustment: Cents;
 }

@@ -164,9 +164,10 @@ describe('calculateShift edge cases', () => {
       { ...salesProfile, totalTipOutPercentOfTips: 50 },
     );
     expect(capped.warnings.map((w) => w.code)).toContain('POOL_EXCEEDS_TIPS');
-    expect(capped.result.roundingAdjustment).toBe(56); // 34056 - 34000
-    expect(capped.result.pool).toBe(34000);
-    expect(capped.result.kept).toBe(56);
+    // 34056 - 34000 floor, plus the barbacks' odd $1 held back on a tie.
+    expect(capped.result.roundingAdjustment).toBe(156);
+    expect(capped.result.pool).toBe(33900);
+    expect(capped.result.kept).toBe(156);
   });
 
   it('poolBasis: foodSales', () => {

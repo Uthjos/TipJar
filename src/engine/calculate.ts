@@ -3,7 +3,7 @@
  */
 import { EngineValidationError, type EngineWarning } from './errors';
 import { memberHours } from './hours';
-import { floorToDollar, splitLargestRemainder } from './money';
+import { floorToDollar, splitLargestRemainder, splitWholeDollars } from './money';
 import type {
   Cents,
   KeptSplitEntry,
@@ -141,21 +141,28 @@ function splitAmongMembers(
   group: { weights: number[]; hours: number[] },
   wholeDollars: boolean,
   totalTips: Cents,
-): MemberResult[] {
-  if (members.length === 0) return [];
+): { members: MemberResult[]; heldBack: Cents } {
+  if (members.length === 0) return { members: [], heldBack: 0 };
   let parts: Cents[];
+  let heldBack: Cents = 0;
   if (wholeDollars && amount % 100 === 0) {
-    parts = safeSplit(amount / 100, group.weights).map((d) => d * 100);
+    // Owner Q7: largest remainder, ties -> more hours, still tied -> held back.
+    const split = splitWholeDollars(amount / 100, group.weights, group.hours);
+    parts = split.parts.map((d) => d * 100);
+    heldBack = split.heldBack * 100;
   } else {
     parts = safeSplit(amount, group.weights);
   }
-  return members.map((m, i) => ({
-    memberId: m.id,
-    name: m.name,
-    hours: group.hours[i]!,
-    amount: parts[i]!,
-    percentOfTips: pct(parts[i]!, totalTips),
-  }));
+  return {
+    members: members.map((m, i) => ({
+      memberId: m.id,
+      name: m.name,
+      hours: group.hours[i]!,
+      amount: parts[i]!,
+      percentOfTips: pct(parts[i]!, totalTips),
+    })),
+    heldBack,
+  };
 }
 
 function basisValue(
@@ -182,11 +189,13 @@ function basisValue(
  * Semantics (see CLAUDE.md §5):
  * - `pool` = amount actually paid out to roles (excludes any retained share).
  * - `kept = totalTips - pool` (includes `retained` and `roundingAdjustment`).
- * - `roundingAdjustment` = unrounded (capped) pool (to the cent) - floored pool; 0 when rounding
+ * - `roundingAdjustment` = unrounded (capped) pool (to the cent) - floored pool, plus odd dollars
+ *   held back from whole-dollar role splits (owner Q7, `RoleResult.heldBack`); 0 when rounding
  *   is off.
  * - `keptChange` = kept - sum(keptSplit) in the bartender flow (the cents left after the
- *   whole-dollar split, 0 when splitting to the cent, or all of kept when no bartenders are
- *   listed); always 0 in the server flow.
+ *   whole-dollar split plus any dollars held back by the tie rule (`keptHeldBack`), 0 when
+ *   splitting to the cent, or all of kept when no bartenders are listed); always 0 in the
+ *   server flow.
  * - Missing roles ('retain'): listed with their computed amount, `missing: true`, no members;
  *   the amount is in `retained`, not `pool`.
  * - Missing roles ('redistribute'): listed with amount 0, `missing: true`; their share goes to
@@ -368,6 +377,8 @@ export function calculateShift(
   // --- 5. assemble roles ----------------------------------------------------
   let pool = 0;
   let retained = 0;
+  let heldFromRoles: Cents = 0;
+  const zeroShares: { name: string }[] = [];
   const roles: RoleResult[] = [];
   let carveK = 0;
   let shareK = 0;
@@ -399,39 +410,50 @@ export function calculateShift(
       continue;
     }
 
-    pool += amount;
     const members = NEVER_MISSING_ROLES.has(rule.role) ? [] : membersOf(rule.role);
     const group = groupHours.get(rule.role);
-    roles.push({
+    const split =
+      group && members.length > 0
+        ? splitAmongMembers(amount, members, group, roundMembers, totalTips)
+        : { members: [], heldBack: 0 };
+    // Odd dollars held back by the tie rule stay with the server / the bar (§5.4 step 4):
+    // the role is paid only what its members got, and the dollars count as rounding.
+    const paid = amount - split.heldBack;
+    heldFromRoles += split.heldBack;
+    if (roundMembers) zeroShares.push(...split.members.filter((m) => m.amount === 0));
+    pool += paid;
+    const roleResult: RoleResult = {
       role: rule.role,
-      amount,
-      percentOfTips: pct(amount, totalTips),
-      percentOfNetSales: pct(amount, netSales),
-      members:
-        group && members.length > 0
-          ? splitAmongMembers(amount, members, group, roundMembers, totalTips)
-          : [],
+      amount: paid,
+      percentOfTips: pct(paid, totalTips),
+      percentOfNetSales: pct(paid, netSales),
+      members: split.members,
       missing: false,
-    });
+    };
+    if (split.heldBack > 0) roleResult.heldBack = split.heldBack;
+    roles.push(roleResult);
   }
 
   const kept = totalTips - pool;
-  const roundingAdjustment = rounding ? poolCents - flooredPool : 0;
+  const roundingAdjustment = rounding ? poolCents - flooredPool + heldFromRoles : 0;
 
   // --- 6. bartender flow: split what the bar keeps --------------------------
   // With whole-dollar rounding the bar shares floorToDollar(kept) in whole dollars and the
   // leftover cents are reported as keptChange (owner Q2); otherwise kept is split to the cent.
   let keptSplit: KeptSplitEntry[] | undefined;
   let keptChange: Cents = 0;
+  let keptHeldBack: Cents = 0;
   if (input.userRole === 'bartender') {
     const bartenders = membersOf('bartender');
     const group = groupHours.get('bartender');
     if (bartenders.length > 0 && group) {
       let parts: Cents[];
       if (roundMembers) {
-        const shared = floorToDollar(kept);
-        keptChange = kept - shared;
-        parts = safeSplit(shared / 100, group.weights).map((d) => d * 100);
+        // Whole dollars with the odd-dollar rule; cents and any held-back dollars are change.
+        const split = splitWholeDollars(floorToDollar(kept) / 100, group.weights, group.hours);
+        parts = split.parts.map((d) => d * 100);
+        keptChange = kept - parts.reduce((a, b) => a + b, 0);
+        if (split.heldBack > 0) keptHeldBack = split.heldBack * 100;
       } else {
         parts = safeSplit(kept, group.weights);
       }
@@ -441,6 +463,7 @@ export function calculateShift(
         hours: group.hours[i]!,
         amount: parts[i]!,
       }));
+      if (roundMembers) zeroShares.push(...keptSplit.filter((k) => k.amount === 0));
     } else {
       // No bartenders listed: nothing is shared, so all of kept is unshared "change" and
       // sum(keptSplit) + keptChange == kept still holds (review round 2, finding #20).
@@ -461,6 +484,17 @@ export function calculateShift(
     roundingAdjustment,
   };
   if (keptSplit !== undefined) result.keptSplit = keptSplit;
+  if (keptHeldBack > 0) result.keptHeldBack = keptHeldBack;
+
+  // Owner Q8: $0 whole-dollar shares are allowed, but tell the user who got nothing.
+  if (zeroShares.length > 0) {
+    const names = [...new Set(zeroShares.map((z) => z.name || 'Someone'))];
+    const one = names.length === 1;
+    warnings.push({
+      code: 'ZERO_SHARE_AFTER_ROUNDING',
+      message: `${names.join(', ')} ${one ? 'gets' : 'get'} $0 after rounding to whole dollars.`,
+    });
+  }
 
   return { result, warnings };
 }

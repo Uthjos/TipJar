@@ -65,6 +65,85 @@ export function splitLargestRemainder(total: Cents, weights: number[]): Cents[] 
   return parts.map((p) => (p === 0 ? 0 : p * sign));
 }
 
+/**
+ * Whole-dollar split with the owner's odd-dollar rule (CLAUDE.md §5.4 step 4, owner Q7).
+ *
+ * 1. Everyone gets the floor of their exact share (total x weight / sum of weights).
+ * 2. Leftover dollars go one at a time by largest fractional remainder.
+ * 3. Equal remainders: more `tieBreakHours` first.
+ * 4. Members still tied (same remainder and same hours) when there aren't enough dollars for all
+ *    of them get none; those dollars (and any after them) are held back.
+ *
+ * Units are whatever the caller uses (whole dollars in the engine).
+ * `sum(parts) + heldBack === totalDollars`. All-zero weights split equally. Remainders and hours
+ * are compared with a small tolerance so float noise (0.5 vs 0.4999999) doesn't break a tie.
+ *
+ * @throws if totalDollars is not a non-negative integer, weights are empty / negative /
+ *   non-finite, or tieBreakHours has a different length than weights.
+ */
+export function splitWholeDollars(
+  totalDollars: number,
+  weights: number[],
+  tieBreakHours: number[] = weights.map(() => 0),
+): { parts: number[]; heldBack: number } {
+  if (!Number.isInteger(totalDollars) || totalDollars < 0) {
+    throw new Error(`splitWholeDollars: total must be a non-negative integer, got ${totalDollars}`);
+  }
+  if (weights.length === 0) throw new Error('splitWholeDollars: weights must not be empty');
+  if (tieBreakHours.length !== weights.length) {
+    throw new Error('splitWholeDollars: tieBreakHours must match weights in length');
+  }
+  for (const x of weights) {
+    if (!Number.isFinite(x) || x < 0) throw new Error(`splitWholeDollars: invalid weight ${x}`);
+  }
+  const rawSum = weights.reduce((a, b) => a + b, 0);
+  const w = rawSum > 0 ? weights : weights.map(() => 1);
+  const sum = rawSum > 0 ? rawSum : w.length;
+
+  const quotas = w.map((x) => (totalDollars * x) / sum);
+  const parts = quotas.map((q) => Math.floor(q + EPS));
+  const fracs = quotas.map((q, i) => Math.max(0, q - parts[i]!));
+  let leftover = totalDollars - parts.reduce((a, b) => a + b, 0);
+
+  // Floating-point safety: flooring with EPS can only overshoot by a hair; undo from the end.
+  for (let i = parts.length - 1; leftover < 0 && i >= 0; i--) {
+    if (parts[i]! > 0) {
+      parts[i]! -= 1;
+      leftover += 1;
+    }
+  }
+
+  // Candidates (positive remainder) ordered by remainder desc, then hours desc.
+  const candidates = w
+    .map((_, i) => i)
+    .filter((i) => fracs[i]! > EPS)
+    .sort((a, b) => {
+      const d = fracs[b]! - fracs[a]!;
+      if (Math.abs(d) > EPS) return d;
+      const h = tieBreakHours[b]! - tieBreakHours[a]!;
+      if (Math.abs(h) > EPS) return h;
+      return a - b;
+    });
+  let k = 0;
+  while (leftover > 0 && k < candidates.length) {
+    const first = candidates[k]!;
+    let end = k + 1;
+    while (
+      end < candidates.length &&
+      Math.abs(fracs[candidates[end]!]! - fracs[first]!) <= EPS &&
+      Math.abs(tieBreakHours[candidates[end]!]! - tieBreakHours[first]!) <= EPS
+    ) {
+      end++;
+    }
+    const size = end - k;
+    if (size > leftover) break; // still tied and not enough for all of them: held back
+    for (let j = k; j < end; j++) parts[candidates[j]!]! += 1;
+    leftover -= size;
+    k = end;
+  }
+  return { parts, heldBack: leftover };
+}
+
 /** Round down to a whole dollar (e.g. 10217 -> 10200). */
 export function floorToDollar(c: Cents): Cents {
   return Math.floor(c / 100) * 100;
