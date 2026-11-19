@@ -8,3 +8,14 @@ web-build/
 coverage/
 ios/
 android/
+expo-env.d.ts
+*.tsbuildinfo
+.kotlin/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+.metro-health-check*
+.DS_Store
