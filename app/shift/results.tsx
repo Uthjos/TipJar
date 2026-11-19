@@ -8,7 +8,7 @@ import { calculateShift, EngineValidationError } from '@/engine/calculate';
 import { formatCents } from '@/engine/money';
 import { roleLabel } from '@/engine/profiles';
 import type { MissingRoleHandling, RoleResult, ShiftInput } from '@/engine/types';
-import { buildShareText, formatPercent, formatShiftDate } from '@/lib/format';
+import { buildShareText, changeNote, formatPercent, formatShiftDate } from '@/lib/format';
 import { buildShiftInput, selectProfile, useShiftStore } from '@/store/shiftStore';
 import { font, MIN_TAP, spacing, useColors } from '@/theme';
 
@@ -47,11 +47,11 @@ function RoleRow({
           value={handling}
           onChange={onHandlingChange}
           options={[
-            { value: 'redistribute', label: 'Give to other roles' },
             {
               value: 'retain',
               label: userRole === 'bartender' ? 'Keep for bartenders' : 'Keep for me',
             },
+            { value: 'redistribute', label: 'Give to other roles' },
           ]}
         />
       </View>
@@ -128,6 +128,8 @@ export default function ResultsScreen() {
   const { input, result, warnings } = computed;
   const isBartender = input.userRole === 'bartender';
   const shareText = buildShareText(input, result);
+  // Bartender flow with whole-dollar rounding: the headline is the whole dollars actually shared.
+  const keptShown = result.kept - result.keptChange;
 
   const onShare = async () => {
     try {
@@ -180,10 +182,10 @@ export default function ResultsScreen() {
         <View
           style={[styles.keptBox, { backgroundColor: c.accent }]}
           accessible
-          accessibilityLabel={`${isBartender ? 'Bar keeps' : 'You keep'} ${formatCents(result.kept)}`}
+          accessibilityLabel={`${isBartender ? 'Bar keeps' : 'You keep'} ${formatCents(keptShown)}`}
         >
           <Body style={{ fontWeight: '600' }}>{isBartender ? 'Bar keeps' : 'You keep'}</Body>
-          <Text style={[styles.kept, { color: c.primary }]}>{formatCents(result.kept)}</Text>
+          <Text style={[styles.kept, { color: c.primary }]}>{formatCents(keptShown)}</Text>
         </View>
         {isBartender && result.keptSplit && result.keptSplit.length > 0
           ? result.keptSplit.map((k) => (
@@ -198,6 +200,7 @@ export default function ResultsScreen() {
             Add the bartenders on shift (including you) to split what the bar keeps.
           </Banner>
         ) : null}
+        {result.keptChange > 0 ? <Muted>{changeNote(result.keptChange)}</Muted> : null}
         {result.roundingAdjustment > 0 ? (
           <Muted>
             Rounded down to the dollar — {formatCents(result.roundingAdjustment)} stays with{' '}

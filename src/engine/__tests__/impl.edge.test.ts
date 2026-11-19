@@ -146,6 +146,38 @@ describe('calculateShift edge cases', () => {
     expect(result.roles[0]!.amount).toBe(300);
   });
 
+  it('poolBasis: pool as a % of net sales, capped at total tips with a warning', () => {
+    const salesProfile: TipOutProfile = {
+      ...SERVER_DEFAULT_PROFILE,
+      id: 'sales',
+      totalTipOutPercentOfTips: 5,
+      poolBasis: 'netSales',
+    };
+    // 5% x 1,560.25 = 78.0125 -> 7801 cents; rounding off.
+    const ok = calculateShift(base, salesProfile);
+    expect(ok.warnings.map((w) => w.code)).not.toContain('POOL_EXCEEDS_TIPS');
+    expect(ok.result.pool).toBe(7801);
+
+    // 50% of net sales (78,012.50) > tips (340.56) -> capped at tips.
+    const capped = calculateShift(
+      { ...base, roundToDollar: true },
+      { ...salesProfile, totalTipOutPercentOfTips: 50 },
+    );
+    expect(capped.warnings.map((w) => w.code)).toContain('POOL_EXCEEDS_TIPS');
+    expect(capped.result.roundingAdjustment).toBe(56); // 34056 - 34000
+    expect(capped.result.pool).toBe(34000);
+    expect(capped.result.kept).toBe(56);
+  });
+
+  it('poolBasis: foodSales', () => {
+    const { result } = calculateShift(base, {
+      ...SERVER_DEFAULT_PROFILE,
+      poolBasis: 'foodSales',
+      totalTipOutPercentOfTips: 10,
+    });
+    expect(result.pool).toBe(7001); // 10% x 700.12 = 70.012
+  });
+
   it('food > net warns', () => {
     const { warnings } = calculateShift({ ...base, foodSales: 200000 }, SERVER_DEFAULT_PROFILE);
     expect(warnings.map((w) => w.code)).toContain('FOOD_EXCEEDS_NET');

@@ -47,7 +47,7 @@ function freshDraft(profileId = 'server-default', roundToDollar = true): DraftSh
     profileId,
     roundToDollar,
     team: [],
-    missingRoleHandling: 'redistribute',
+    missingRoleHandling: 'retain',
   };
 }
 

@@ -41,12 +41,34 @@ describe('manual flow screens', () => {
     expect(screen.getByText('+ Add host')).toBeTruthy();
   });
 
-  it('Results shows the golden tip-out and the missing-role toggle', async () => {
+  it('Results shows the tip-out and the missing-role toggle', async () => {
     seedGolden();
     await render(<ResultsScreen />);
-    expect(screen.getByText('$102.00')).toBeTruthy();
+    // No host on shift and 'retain' by default: $102 pool less the host's $11 kept.
+    expect(screen.getByText('$91.00')).toBeTruthy();
     expect(screen.getByText('Nobody on shift')).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText('Keep for me'));
+    // Defaults to keeping the missing share (owner Q3).
     expect(useShiftStore.getState().draft.missingRoleHandling).toBe('retain');
+    expect(screen.getByText('$11.00 kept')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Give to other roles'));
+    expect(useShiftStore.getState().draft.missingRoleHandling).toBe('redistribute');
+  });
+
+  it('bartender Results headline shows whole dollars with a change note', async () => {
+    const s = useShiftStore.getState();
+    s.setProfile('bartender-default'); // adds "Me" as a bartender
+    s.setMoney('totalTips', 19255);
+    s.setMoney('netSales', 90543);
+    s.setMoney('foodSales', 12000);
+    s.addMember('bartender', 'Aaron');
+    s.addMember('barback', 'David');
+    s.addMember('barback', 'Allen');
+    await render(<ResultsScreen />);
+    expect(screen.getByLabelText('Bar keeps $149.00')).toBeTruthy();
+    expect(
+      screen.getByText('$0.55 in change left over — stays with whoever closes out.'),
+    ).toBeTruthy();
+    expect(screen.getByText('$75.00')).toBeTruthy();
+    expect(screen.getByText('$74.00')).toBeTruthy();
   });
 });

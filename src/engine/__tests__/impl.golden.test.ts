@@ -37,8 +37,9 @@ describe('golden test 1 — server example (§5.5)', () => {
     expect(warnings).toEqual([]);
     expect(result.pool).toBe(10200);
     expect(result.roundingAdjustment).toBe(17);
-    // kept = totalTips - pool = 34056 - 10200 (the brief's 24056 was an arithmetic slip)
+    // kept = totalTips - pool = 34056 - 10200
     expect(result.kept).toBe(23856);
+    expect(result.keptChange).toBe(0);
     expect(result.retained).toBe(0);
     expect(result.keptSplit).toBeUndefined();
 
@@ -48,9 +49,16 @@ describe('golden test 1 — server example (§5.5)', () => {
     expect(role(result.roles, 'bartender').amount).toBe(4400);
     expect(amounts(role(result.roles, 'bartender'))).toEqual([2200, 2200]);
     expect(role(result.roles, 'barback').amount).toBe(3300);
-    expect(amounts(role(result.roles, 'barback'))).toEqual([1650, 1650]);
+    // Whole-dollar member shares by default (owner Q1); tie -> earlier member.
+    expect(amounts(role(result.roles, 'barback'))).toEqual([1700, 1600]);
     expect(role(result.roles, 'host').amount).toBe(1100);
     expect(amounts(role(result.roles, 'host'))).toEqual([1100]);
+  });
+
+  it('roundMemberShares: false restores cent splits', () => {
+    const r = calculateShift(goldenServer, SERVER_DEFAULT_PROFILE, { roundMemberShares: false });
+    expect(amounts(role(r.result.roles, 'barback'))).toEqual([1650, 1650]);
+    expect(r.result.keptChange).toBe(0);
   });
 
   it('reports percentages in 0–100', () => {
@@ -90,7 +98,7 @@ describe('golden test 2 — bartender example (§5.6)', () => {
     expect(result.pool).toBe(4300);
     expect(role(result.roles, 'kitchen').amount).toBe(200);
     expect(role(result.roles, 'barback').amount).toBe(4100);
-    expect(amounts(role(result.roles, 'barback'))).toEqual([2050, 2050]);
+    expect(amounts(role(result.roles, 'barback'))).toEqual([2100, 2000]);
     const host = role(result.roles, 'host');
     expect(host.amount).toBe(1400);
     expect(host.missing).toBe(true);
@@ -98,22 +106,36 @@ describe('golden test 2 — bartender example (§5.6)', () => {
     expect(result.retained).toBe(1400);
     expect(result.roundingAdjustment).toBe(77);
     expect(result.kept).toBe(14955);
-    expect(result.keptSplit!.map((k) => k.amount)).toEqual([7478, 7477]);
+    // Bar shares $149 in whole dollars; $0.55 change (owner Q2).
+    expect(result.keptSplit!.map((k) => k.amount)).toEqual([7500, 7400]);
+    expect(result.keptChange).toBe(55);
     expect(result.keptSplit!.map((k) => k.name)).toEqual(['Joseph', 'Aaron']);
   });
 
-  it('retain + roundMemberShares: barbacks $21 / $20', () => {
+  it('retain + roundMemberShares: false restores cent-level splits', () => {
     const { result } = calculateShift(bartenderInput('retain'), BARTENDER_DEFAULT_PROFILE, {
-      roundMemberShares: true,
+      roundMemberShares: false,
     });
-    expect(amounts(role(result.roles, 'barback'))).toEqual([2100, 2000]);
+    expect(amounts(role(result.roles, 'barback'))).toEqual([2050, 2050]);
     expect(result.keptSplit!.map((k) => k.amount)).toEqual([7478, 7477]);
+    expect(result.keptChange).toBe(0);
+    expect(result.kept).toBe(14955);
+  });
+
+  it('rounding off: keptSplit to the cent, keptChange 0', () => {
+    const { result } = calculateShift(
+      { ...bartenderInput('retain'), roundToDollar: false },
+      BARTENDER_DEFAULT_PROFILE,
+    );
+    expect(result.keptChange).toBe(0);
+    expect(result.keptSplit!.reduce((a, k) => a + k.amount, 0)).toBe(result.kept);
   });
 
   it('redistribute: hosts share goes to the barbacks', () => {
     const { result } = calculateShift(bartenderInput('redistribute'), BARTENDER_DEFAULT_PROFILE);
     expect(role(result.roles, 'kitchen').amount).toBe(200);
     expect(role(result.roles, 'barback').amount).toBe(5500);
+    expect(amounts(role(result.roles, 'barback'))).toEqual([2800, 2700]);
     const host = role(result.roles, 'host');
     expect(host.amount).toBe(0);
     expect(host.missing).toBe(true);
@@ -121,6 +143,7 @@ describe('golden test 2 — bartender example (§5.6)', () => {
     expect(result.pool).toBe(5700);
     expect(result.kept).toBe(13555);
     expect(result.roundingAdjustment).toBe(77);
-    expect(result.keptSplit!.map((k) => k.amount)).toEqual([6778, 6777]);
+    expect(result.keptSplit!.map((k) => k.amount)).toEqual([6800, 6700]);
+    expect(result.keptChange).toBe(55);
   });
 });

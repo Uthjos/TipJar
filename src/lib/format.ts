@@ -17,6 +17,11 @@ export function formatShiftDate(iso: string): string {
   }
 }
 
+/** Note for the bar's leftover change, e.g. "$0.55 in change left over — stays with whoever closes out." */
+export function changeNote(keptChange: number): string {
+  return `${formatCents(keptChange)} in change left over — stays with whoever closes out.`;
+}
+
 /** Plain-text summary to paste into a group chat. */
 export function buildShareText(input: ShiftInput, result: ShiftResult): string {
   const lines: string[] = [];
@@ -38,8 +43,9 @@ export function buildShareText(input: ShiftInput, result: ShiftResult): string {
     lines.push(`${roleLabel(r.role)}: ${formatCents(r.amount)}${members ? ` — ${members}` : ''}`);
   }
   if (input.userRole === 'bartender') {
-    lines.push(`Bar keeps: ${formatCents(result.kept)}`);
+    lines.push(`Bar keeps: ${formatCents(result.kept - result.keptChange)}`);
     for (const k of result.keptSplit ?? []) lines.push(`  ${k.name} ${formatCents(k.amount)}`);
+    if (result.keptChange > 0) lines.push(`(${changeNote(result.keptChange)})`);
   } else {
     lines.push(`I keep: ${formatCents(result.kept)}`);
   }
