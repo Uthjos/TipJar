@@ -248,3 +248,90 @@ All of these are in §5.4 step 4:
 - `npm run typecheck`: clean.
 - `npx prettier --check .`: all files formatted.
 - `git status`: clean.
+
+---
+
+# Round 4: milestone 4
+
+Main started at `6af76e5`. That commit added `docs/m4-contract.md`, the shared persistence API, after the GitHub `LICENSE` merge. I read the contract and CLAUDE.md §7 before merging. A remote `origin` now exists, and nothing was pushed.
+
+## R4.1 Merges
+
+| Step                                  | Commit    | What                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Merge `feat/m4-persistence` (--no-ff) | `97420e1` | Adds `expo-sqlite`, plus `sql.js` as a devDependency. New `src/db/` files: types, migrations, seed, repositories, `testing/sqljsDb`, and `client` with the `fromExpoSqlite` adapter. The store now hydrates with loading and error states. Save and delete persist, `rememberTeam` runs on save, quick-add chips are added, and settings are persisted. |
+| Merge `test/m4-persistence` (--no-ff) | `d3a653a` | Migrations, seed, repository and snapshot acceptance tests (85, written against a stub), `src/test-support/shiftFixtures.ts`, and findings #40–#54.                                                                                                                                                                                                     |
+| Decisions                             | `24bbb40` | Repository changes for #41, #47, #48, #49 and #52, the test updates, `review.db.test.ts`, and the contract decisions section.                                                                                                                                                                                                                           |
+
+After both merges, with `npm ci` run for the new dependencies:
+
+- **385 passed, 0 failed** (20 suites).
+- Lint, typecheck and Prettier clean.
+- No merge conflicts.
+
+## R4.2 Triage
+
+Nothing failed after the merge. The tester's column-name guesses (#40) didn't cause failures, because the tests used `PRAGMA table_info` plus a name heuristic and the real columns (`total_tips`, `pool`, `kept_change`, …) matched it. As instructed, I still made the tests exact to the real schema (below).
+
+Applying the decisions changed three tests:
+
+| Test                                                              | Category                         | Resolution                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `impl.db › coworkers + settings › rememberTeam upserts by name …` | (c) judgment call, decided (#47) | This implementer test expected the later spelling ("aaron") to replace "Aaron". Under #47 the existing spelling is kept, so it now expects "Aaron". The test still checks everything else it did.                                                                                                   |
+| `migrations › money is stored as INTEGER cents › *`               | (b) test-side guess (#40)        | The name-regex heuristic was replaced by the column list pinned in the contract. Two tests now check that every pinned money column exists and is declared `INTEGER`, and that every stored value in them is `integer`. This is stricter than before: the old test also accepted `null` and `text`. |
+| `repositories › listProfiles: default profiles first …`           | (b) under-specified test (#53)   | It accepted either order of the two defaults. It now asserts `['server-default', 'bartender-default']`.                                                                                                                                                                                             |
+
+Totals: 0 implementation bugs and 0 test bugs found by merging. 1 judgment call (#47), already decided by the coordinator. 2 tests were made stricter (#40, #53).
+
+## R4.3 Findings #40–#54
+
+| #   | Finding                                | Disposition                                              | Notes                                                                                                                                                                                                                               |
+| --- | -------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 40  | Column names not in the contract       | **Accepted** (contract + tests)                          | The full v1 schema is now pinned in `docs/m4-contract.md`. Money columns: `shifts.total_tips/net_sales/food_sales` and `shift_results.pool/kept/kept_change/retained/rounding_adjustment`. The tests check them by name.            |
+| 41  | `listShifts` ties; `savedAt` format    | **Accepted** (changed)                                   | Order is `date` DESC, `saved_at` DESC, `rowid` DESC (newest insert), then `id` DESC. `savedAt` is normalised through `toISOString()`, including caller-supplied values. Tests cover the tie, mixed formats and normalisation.       |
+| 42  | `listCoworkers` order                  | **Accepted** (already implemented)                       | Never-worked coworkers sort last, then by name with `COLLATE NOCASE`. Added a mixed-case test.                                                                                                                                      |
+| 43  | `updateShift` and `savedAt`            | **Accepted** (already implemented)                       | `id` and `savedAt` are kept. The tester's test covers it.                                                                                                                                                                           |
+| 44  | Re-seed after every profile is deleted | **Deferred to M5**                                       | Contract behaviour is kept. The M5 editor should block deleting the last profile.                                                                                                                                                   |
+| 45  | `rememberTeam` matches across roles    | **Deferred to M5**                                       | v1 matches by name only. M5 coworker management can add matching by (name, role) or a "different people" option.                                                                                                                    |
+| 46  | Placeholder names                      | **Resolved** (implementer decision 4)                    | `saveShift(input, result, draft.team)` passes the team as typed. Unnamed members have blank names, which `rememberTeam` skips. Covered by `impl.persistence.test`.                                                                  |
+| 47  | Which spelling wins                    | **Accepted** (changed)                                   | A name match keeps the existing spelling, and new names are stored trimmed. `upsertCoworker` with an explicit `id` renames. Tests added.                                                                                            |
+| 48  | `lastWorked` moving backwards          | **Accepted** (changed; overrides implementer decision 3) | `lastWorked` becomes the later of the stored value and the shift date. `usualRole` only changes when the date is on or after the stored `lastWorked`. An older shift still adds coworkers who weren't saved yet. Three tests added. |
+| 49  | Non-ASCII case folding                 | **Accepted** (changed, small)                            | `coworkerKey` is now `trim().normalize('NFC').toLocaleLowerCase()`, stored in `name_key`. Zoë, ZOË and a decomposed "Zoë" all match. Test added. No shipped data exists, so no migration was needed.                                |
+| 50  | Duplicate names in one team            | **Deferred to M5**                                       | Tied to #45.                                                                                                                                                                                                                        |
+| 51  | Optional fields absent, not null       | **Accepted** (holds)                                     | Snapshots round-trip through JSON. `poolBasis` and `lastWorked` are omitted when the column is NULL. The tester's snapshot tests pass. Stated in the contract.                                                                      |
+| 52  | Settings edge cases                    | **Accepted** (changed)                                   | `setSetting(key, undefined)` deletes the row. A parse error already returned the fallback. Two tests added.                                                                                                                         |
+| 53  | Order of the two defaults              | **Accepted** (test made specific)                        | Server default, then Bartender default (`DEFAULT_PROFILES` order).                                                                                                                                                                  |
+| 54  | Shifts referencing a deleted profile   | **Deferred to M5**                                       | History Edit should fall back to the current default for the shift's `userRole` and tell the user.                                                                                                                                  |
+
+Counts (15 findings):
+
+- **Accepted 10:**
+  - 5 changed: #41, #47, #48, #49, #52.
+  - 3 already implemented or holding: #42, #43, #51.
+  - 2 contract or test only: #40, #53.
+- **Resolved 1:** #46.
+- **Deferred to M5 4:** #44, #45, #50, #54.
+- **Rejected 0.**
+
+**Implementer decisions.** 1, 2, 4, 5 and 6 are kept: defaults first in built-in order, name-match `upsertCoworker` without an id, placeholders not remembered, chips only for profile roles, fire-and-forget settings writes. Decision 3 is replaced by #48.
+
+## R4.4 Doc edits
+
+- `docs/m4-contract.md`: added "Decisions (main-branch review, round 4)". It pins the schema and records #41, #42, #43, #46, #47, #48, #49, #51, #52 and #53, plus the M5 deferrals.
+- CLAUDE.md: not edited this round.
+
+## R4.5 Owner decisions
+
+No new owner decisions. Still open from §11: Q6 (cloud backup / accounts).
+
+## R4.6 Final check output (main @ HEAD)
+
+- `npm test`: **21 suites, 398 tests passed, 0 failed**.
+  - engine project: 20 suites, 392 tests.
+  - ui project: 1 suite, 6 tests.
+  - Round 4 added 13 tests: 12 in `src/db/__tests__/review.db.test.ts`, and the money-column test became two.
+- `npm run lint`: 0 errors, 0 warnings.
+- `npm run typecheck`: clean.
+- `npx prettier --check .`: all files formatted.
+- `npx expo export --platform android`: bundled. One Hermes bundle (`entry-….hbc`, 3 MB), exported to the scratchpad, not the repo. The app doesn't import `sql.js` or `src/db/testing`.
+- `git status`: clean. Nothing pushed.
