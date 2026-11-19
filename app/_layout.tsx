@@ -1,8 +1,22 @@
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useColorScheme } from 'react-native';
+import { useEffect } from 'react';
+import { ActivityIndicator, StyleSheet, Text, useColorScheme, View } from 'react-native';
 
-import { palette } from '@/theme';
+import { Button } from '@/components/ui';
+import { getDb } from '@/db/client';
+import { useShiftStore } from '@/store/shiftStore';
+import { font, palette, spacing } from '@/theme';
+
+function loadFromDevice() {
+  const { hydrate, setLoadError } = useShiftStore.getState();
+  useShiftStore.setState({ status: 'loading' });
+  getDb()
+    .then(hydrate)
+    .catch((e: unknown) =>
+      setLoadError(e instanceof Error ? e.message : 'Could not open saved data.'),
+    );
+}
 
 export default function RootLayout() {
   const scheme = useColorScheme();
@@ -20,6 +34,33 @@ export default function RootLayout() {
       border: c.border,
     },
   };
+  const status = useShiftStore((s) => s.status);
+  const loadError = useShiftStore((s) => s.loadError);
+
+  useEffect(() => {
+    loadFromDevice();
+  }, []);
+
+  if (status !== 'ready') {
+    return (
+      <View style={[styles.center, { backgroundColor: c.background }]}>
+        <StatusBar style={dark ? 'light' : 'dark'} />
+        {status === 'loading' ? (
+          <>
+            <ActivityIndicator size="large" color={c.primary} />
+            <Text style={{ color: c.textMuted, fontSize: font.body }}>Loading your shifts…</Text>
+          </>
+        ) : (
+          <>
+            <Text accessibilityRole="alert" style={{ color: c.danger, fontSize: font.body }}>
+              {loadError ?? 'Could not open saved data.'}
+            </Text>
+            <Button label="Try again" onPress={loadFromDevice} />
+          </>
+        )}
+      </View>
+    );
+  }
 
   return (
     <ThemeProvider value={theme}>
@@ -32,3 +73,13 @@ export default function RootLayout() {
     </ThemeProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.lg,
+    padding: spacing.xl,
+  },
+});
