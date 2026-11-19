@@ -3,8 +3,9 @@
  * Runs are seeded so the suite is deterministic; bump NUM_RUNS locally to fuzz harder.
  *
  * Owner decisions (2026-11-18) encoded here: whole-dollar member shares and keptSplit when
- * rounding is on (roundMemberShares defaults to true), keptChange, and poolBasis with the
- * POOL_EXCEEDS_TIPS cap.
+ * rounding is on (roundMemberShares defaults to true), keptChange, poolBasis with the
+ * POOL_EXCEEDS_TIPS cap, the Q7 odd-dollar rule (largest remainder -> more hours -> held back),
+ * ZERO_SHARE_AFTER_ROUNDING (Q8) and TeamMember.isUser being ignored by the engine (Q9).
  */
 import * as fc from 'fast-check';
 import { calculateShift } from '../calculate';
@@ -258,31 +259,52 @@ describe('calculateShift properties', () => {
 
   // Precondition: the generator always lists >= 1 bartender in the bartender flow. With none,
   // keptChange = kept (review round 2, #20); covered in review.test.ts.
-  it('0 <= keptChange < 100; it is kept % 100 with whole-dollar shares, else 0', () => {
+  it('keptChange = (kept - floorToDollar(kept)) + dollars held back from keptSplit', () => {
     fc.assert(
       fc.property(caseArb, (c) => {
         const res = run(c);
         expect(Number.isInteger(res.keptChange)).toBe(true);
         expect(res.keptChange).toBeGreaterThanOrEqual(0);
-        expect(res.keptChange).toBeLessThan(100);
         if (c.input.userRole === 'bartender' && wholeDollarShares(c)) {
-          expect(res.keptChange).toBe(res.kept % 100);
+          const held = res.keptChange - (res.kept % 100);
+          // the held part is whole dollars, fewer than the number of bartenders sharing
+          expect(held).toBeGreaterThanOrEqual(0);
+          expect(held % 100).toBe(0);
+          expect(held / 100).toBeLessThan(res.keptSplit!.length);
+          expect(res.keptHeldBack ?? 0).toBe(held);
         } else {
           expect(res.keptChange).toBe(0);
+          expect(res.keptHeldBack ?? 0).toBe(0);
         }
       }),
       PARAMS,
     );
   });
 
-  it('keptChange never changes kept: kept is the same with or without whole-dollar shares', () => {
+  it('held-back dollars per role are whole dollars, fewer than the members, and move pool -> kept', () => {
     fc.assert(
       fc.property(caseArb, (c) => {
         const whole = calculateShift(c.input, c.profile, { roundMemberShares: true }).result;
         const cents = calculateShift(c.input, c.profile, { roundMemberShares: false }).result;
-        expect(whole.kept).toBe(cents.kept);
-        expect(whole.pool).toBe(cents.pool);
-        expect(whole.roles.map((r) => r.amount)).toEqual(cents.roles.map((r) => r.amount));
+        let heldTotal = 0;
+        whole.roles.forEach((r, i) => {
+          const centsRole = at(cents.roles, i);
+          expect(r.role).toBe(centsRole.role);
+          const held = centsRole.amount - r.amount;
+          expect(r.heldBack ?? 0).toBe(held);
+          if (!c.input.roundToDollar || r.members.length === 0) {
+            expect(held).toBe(0);
+          } else {
+            expect(held).toBeGreaterThanOrEqual(0);
+            expect(held % 100).toBe(0);
+            expect(held / 100).toBeLessThan(r.members.length);
+          }
+          heldTotal += held;
+        });
+        expect(whole.pool).toBe(cents.pool - heldTotal);
+        expect(whole.kept).toBe(cents.kept + heldTotal);
+        expect(whole.roundingAdjustment).toBe(cents.roundingAdjustment + heldTotal);
+        expect(whole.retained).toBe(cents.retained);
       }),
       PARAMS,
     );
@@ -307,15 +329,19 @@ describe('calculateShift properties', () => {
     );
   });
 
-  it('roundingAdjustment is 0 when rounding is off, and in [0, 99] when on', () => {
+  it('roundingAdjustment = floor trim (0-99c) + dollars held back from roles; 0 when off', () => {
     fc.assert(
       fc.property(caseArb, (c) => {
         const res = run(c);
-        if (!c.input.roundToDollar) expect(res.roundingAdjustment).toBe(0);
-        else {
-          expect(res.roundingAdjustment).toBeGreaterThanOrEqual(0);
-          expect(res.roundingAdjustment).toBeLessThan(100);
+        if (!c.input.roundToDollar) {
+          expect(res.roundingAdjustment).toBe(0);
+          return;
         }
+        const held = sum(res.roles.map((r) => r.heldBack ?? 0));
+        const trim = res.roundingAdjustment - held;
+        expect(trim).toBeGreaterThanOrEqual(0);
+        expect(trim).toBeLessThan(100);
+        if (!wholeDollarShares(c)) expect(held).toBe(0);
       }),
       PARAMS,
     );
@@ -367,11 +393,14 @@ describe('calculateShift properties', () => {
     );
   });
 
-  it("'redistribute' pays out exactly what 'retain' pays plus what it retains", () => {
+  it("'redistribute' pays out exactly what 'retain' pays plus what it retains (cent members)", () => {
+    // With whole-dollar members the odd-dollar holds differ between the two allocations, so the
+    // identity is checked with cent-level member splits (findings #35).
     fc.assert(
       fc.property(caseArb, (c) => {
-        const retain = run(c, { missingRoleHandling: 'retain' });
-        const redistribute = run(c, { missingRoleHandling: 'redistribute' });
+        const cents = { ...c, roundMemberShares: false };
+        const retain = run(cents, { missingRoleHandling: 'retain' });
+        const redistribute = run(cents, { missingRoleHandling: 'redistribute' });
         expect(redistribute.pool).toBe(retain.pool + retain.retained);
         expect(redistribute.retained).toBe(0);
         expect(retain.kept).toBeGreaterThanOrEqual(redistribute.kept);
@@ -380,11 +409,13 @@ describe('calculateShift properties', () => {
     );
   });
 
-  it('members with no hours entered get equal shares (within one cent / one dollar)', () => {
+  it('members with no hours entered get equal shares (identical in whole dollars, within 1c)', () => {
+    // Whole dollars: equal members tie on remainder and hours, so they always get the same
+    // amount (any odd dollars are held back, owner Q7). Cents: within one cent.
     fc.assert(
       fc.property(caseArb, (c) => {
         const res = run(c);
-        const tol = wholeDollarShares(c) ? 100 : 1;
+        const tol = wholeDollarShares(c) ? 0 : 1;
         for (const r of res.roles) {
           const ids = new Set(r.members.map((m) => m.memberId));
           const anyHours = c.input.team.some(
@@ -422,6 +453,50 @@ describe('calculateShift properties', () => {
         }
       }),
       PARAMS,
+    );
+  });
+
+  it('ZERO_SHARE_AFTER_ROUNDING: never with rounding off; always when a member got $0 of a non-empty split', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const { result, warnings } = runFull(c);
+        const zero = warnings.filter((w) => w.code === 'ZERO_SHARE_AFTER_ROUNDING');
+        expect(zero.length).toBeLessThanOrEqual(1);
+        if (!c.input.roundToDollar) {
+          expect(zero).toHaveLength(0);
+          return;
+        }
+        if (!wholeDollarShares(c)) return; // cent splits under rounding: findings #36
+        const zeroMembers = result.roles.flatMap((r) =>
+          r.members.filter((m) => m.amount === 0).map((m) => ({ m, role: r })),
+        );
+        const zeroBartenders = (result.keptSplit ?? []).filter((k) => k.amount === 0);
+        if (zeroMembers.length === 0 && zeroBartenders.length === 0) {
+          expect(zero).toHaveLength(0);
+        }
+        // a role that had at least $1 to split but left someone at $0 must warn and name them
+        for (const { m, role } of zeroMembers) {
+          if (role.amount + (role.heldBack ?? 0) >= 100) {
+            expect(zero).toHaveLength(1);
+            expect(at(zero, 0).message).toContain(m.name);
+          }
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('TeamMember.isUser never changes the output', () => {
+    fc.assert(
+      fc.property(caseArb, fc.nat(), (c, pick) => {
+        const team = c.input.team.map((m, i) => ({
+          ...m,
+          isUser: c.input.team.length > 0 && i === pick % c.input.team.length,
+        }));
+        const flagged = runFull({ ...c, input: { ...c.input, team } });
+        expect(flagged).toEqual(runFull(c));
+      }),
+      { seed: SEED, numRuns: 150 },
     );
   });
 

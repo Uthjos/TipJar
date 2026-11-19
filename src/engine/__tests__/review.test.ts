@@ -61,8 +61,9 @@ describe('review: clock and hours validation', () => {
     ];
     const { result } = calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE);
     // Golden 1 barbacks $33, same as with no hours entered: whole dollars by default
-    // (owner Q1) -> $17 / $16; to the cent with roundMemberShares: false -> $16.50 / $16.50.
-    expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 1700, allen: 1600 });
+    // (owner Q7: remainders and hours tie -> odd dollar held back) -> $16 / $16;
+    // to the cent with roundMemberShares: false -> $16.50 / $16.50.
+    expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 1600, allen: 1600 });
     const cents = calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE, {
       roundMemberShares: false,
     }).result;
@@ -211,7 +212,9 @@ describe('review: validation gaps (#14)', () => {
 
 describe('review round 2: keptChange with no bartenders listed (#20)', () => {
   // Bartender default, no bartenders on the team, barbacks + host staffed.
-  // Tips $192.55 -> pool 5777 -> floor $57; kept = 19255 - 5700 = 13555.
+  // Tips $192.55 -> pool 5777 -> floor $57: KTO $2 / barbacks $41 / host $14.
+  // Rounding on (owner Q7): barbacks $41 / 2 ties -> $20 / $20, $1 held back -> pool 5600,
+  // kept = 19255 - 5600 = 13655. Rounding off: pool 5777, kept 13478.
   const team = [
     member('David', 'barback', { id: 'david' }),
     member('Allen', 'barback', { id: 'allen' }),
@@ -232,7 +235,7 @@ describe('review round 2: keptChange with no bartenders listed (#20)', () => {
       expect(result.keptSplit).toEqual([]);
       expect(result.keptChange).toBe(result.kept);
       expect(result.kept + result.pool).toBe(19255);
-      if (roundToDollar) expect(result.kept).toBe(13555);
+      expect(result.kept).toBe(roundToDollar ? 13655 : 13478);
     },
   );
 });

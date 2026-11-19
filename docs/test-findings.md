@@ -4,6 +4,8 @@ Author: Agent 2 (Tester), branch `test/engine`; updated on `test/owner-decisions
 
 **Update (test/owner-decisions):** items 3, 4, 5 and 19 are **resolved by the owner**, and 6(a) is confirmed (owner Q5). The suite now encodes the decisions: whole-dollar member shares and `keptSplit` when rounding is on (`roundMemberShares` defaults to true), `keptChange`, `poolBasis` with the `POOL_EXCEEDS_TIPS` cap, and equal clock times rejected with `INVALID_CLOCK` at the `calculateShift` level too. New findings start at **#20**. Against an unmodified `main` engine, 49 of the updated tests fail as expected (new behaviour). Against a scratch stub patched with the new behaviour (outside the repo, not committed), every test in the tester-owned files and `review.test.ts` passes, and they type-check under `strict` + `noUncheckedIndexedAccess`. 4 tests in the implementer-owned `impl.golden.test.ts` encode the old defaults and fail under the new behaviour (#29).
 
+**Update (test/owner-decisions-2):** encodes owner Q7–Q9. Whole-dollar member splits use floor, then largest remainder, then more hours; members still tied get none and those dollars are held back. Held dollars from a role reduce `pool`, raise `kept` and add to `roundingAdjustment`; held dollars from `keptSplit` add to `keptChange`. Also covered: the `ZERO_SHARE_AFTER_ROUNDING` warning, `TeamMember.isUser` being ignored by the engine, and the new `splitWholeDollars` helper (`wholeDollars.test.ts`). Golden values follow CLAUDE.md §5.5/§5.6 at `57c4053`. #23 (tie bias to the first member) is superseded by Q7. New findings start at **#31**.
+
 The suite lives in `src/engine/__tests__/` (`money`, `hours`, `calculate`, `golden`, `properties`). Builders are in `src/test-support/builders.ts`. Every expected value is worked out by hand in a comment next to the assertion. Before committing, the suite was type-checked and run against a throwaway reference stub outside the repo: 147 tests passed, and the files compile under `strict` + `noUncheckedIndexedAccess` + `noUnusedLocals`. The stub was written from the same reading of the spec, so this proves the tests agree with each other. It does not prove they match the real implementation.
 
 Each item below gives **what**, **why**, a **proposed resolution**, and the **affected tests** (`file › describe › it`, abbreviated).
@@ -206,7 +208,9 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 - **Resolution:** No engine change. The Results screen should show `keptChange` and any $0 member clearly. The owner may want a note on very small shifts.
 - **Tests:** `calculate › keptChange … › splits floorToDollar(kept) …` (David $1 / Allen $0), `… › kept under $1 …`, `calculate › equal clock-in and clock-out › a one-minute shift is still valid …`.
 
-### 23. Systematic tie-break bias with whole dollars
+### 23. Systematic tie-break bias with whole dollars — **SUPERSEDED by owner Q7**
+
+> Ties no longer go to the first-listed member: more hours wins, and a full tie holds the dollar back. See #38 for the new trade-off.
 
 - **What:** Ties go to the earlier member (§5.2). In cents that is at most 1¢ per shift; in whole dollars it is **$1 per shift**, every shift, for whoever is listed first (Golden 2: Joseph $75 / Aaron $74; redistribute: $68 / $67; Golden 1 barbacks: David $17 / Allen $16). Over a month of identical shifts that adds up to about $1 per shift for the same person.
 - **Why:** Team order typically comes from saved coworkers, so the same person will usually be first.
@@ -259,6 +263,68 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 
 ---
 
+## E. New findings from owner Q7–Q9 (test/owner-decisions-2)
+
+### 31. Held dollars are not passed down to smaller remainders
+
+- **What:** Take $3 split 7:7:1, with exact shares 1.4 / 1.4 / 0.2. The two .4 members tie for the single leftover dollar, so it is held. The spec doesn't say whether that dollar should then go to the 0.2 member instead.
+- **Why:** §5.4 step 4.4 says "none of them gets it — those dollars are held back". Giving it to someone with a smaller remainder would reward a less-deserving share over the tied ones.
+- **Resolution:** The tests assume that **all** remaining leftover dollars are held once a tied group can't be fully served. Spell this out in §5.4.
+- **Tests:** `wholeDollars › … › held dollars are not passed down to a smaller remainder`, and `wholeDollars › properties › nobody with a smaller (remainder, hours) gets a dollar …`.
+
+### 32. Remainder ties must be detected despite floating-point error
+
+- **What:** $2 split 4:14:2 gives exact shares 0.4 / 1.4 / 0.2. In IEEE754, `1.4 − 1 = 0.3999999999999999`, so a naive `===` comparison of remainders misses the tie and gives member 0 the dollar.
+- **Why:** Hours are user-entered decimals (7.5h, 6.25h), so mathematically equal remainders often differ in the last bit. Uneven tie handling would be visible to users.
+- **Resolution:** Compare remainders with a small epsilon (for example 1e-9 dollars), or compute in integer units (quarter-hours × cents). Apply the same epsilon to the hours comparison.
+- **Tests:** `wholeDollars › … › detects remainder ties exactly despite floating-point error`. The fast-check property uses integer weights and exact `(total × w) mod W` remainders.
+
+### 33. `ZERO_SHARE_AFTER_ROUNDING` for bartenders in `keptSplit`
+
+- **What:** The tests assume a bartender whose whole-dollar `keptSplit` share is $0 is named in the warning, the same as a role member.
+- **Why:** §5.4 step 4 introduces the split as "used for role members and for `keptSplit`", and the warning sits in the same step. The coordinator's brief only said "any member".
+- **Resolution:** Confirm. If the warning should cover tip-out role members only, drop that test.
+- **Tests:** `calculate › ZERO_SHARE_AFTER_ROUNDING warning › a bartender whose whole-dollar keptSplit share is $0 is named too`.
+
+### 34. `ZERO_SHARE_AFTER_ROUNDING` when there was nothing to split
+
+- **What:** With $0 tips (or a $0 pool), every member's whole-dollar share is $0. Read literally, the warning fires on every empty shift.
+- **Resolution:** Only warn when the amount being split was at least $1 and someone still got $0. The tests don't assert either way for an empty split: the zero-tips test filters this code out, and the property only requires the warning when the role had at least $1 before holds.
+- **Tests:** `calculate › zero tips › server flow: everything is 0 …`, `properties › ZERO_SHARE_AFTER_ROUNDING: never with rounding off; …`.
+
+### 35. 'redistribute' vs 'retain' identity only holds for cent splits
+
+- **What:** Before Q7, `pool(redistribute) == pool(retain) + retained(retain)` always held. With whole-dollar members, the two allocations can hold back different odd dollars. In Golden 2 both hold $1 (barbacks $41 and $55), so the identity happens to hold there, but it breaks when only one of the two allocations hits a tie.
+- **Resolution:** No engine change. The property now checks the identity with `roundMemberShares: false`.
+- **Tests:** `properties › 'redistribute' pays out exactly what 'retain' pays plus what it retains (cent members)`.
+
+### 36. `ZERO_SHARE_AFTER_ROUNDING` with rounding on but cent splits
+
+- **What:** With `roundToDollar: true` and `roundMemberShares: false`, members are split to the cent and can still get $0.00 (for example a 0-hour member). The spec says "whole-dollar share is $0", so the warning arguably doesn't apply.
+- **Resolution:** Don't emit it in cent mode. Not tested: the property skips this combination.
+
+### 37. `heldBack` / `keptHeldBack` are only present when > 0
+
+- **What:** `RoleResult.heldBack` and `ShiftResult.keptHeldBack` are optional and only set when positive. The tests read them as `?? 0`. `roundingAdjustment` now mixes two things: the floor trim (0–99¢) and the held dollars.
+- **Resolution:** Either always set them (0 when nothing is held), or keep them optional and document it in `types.ts`. The Results "rounding note" should show the floor trim and the held dollars separately, using `heldBack` per role.
+- **Tests:** `properties › roundingAdjustment = floor trim (0-99c) + dollars held back from roles; 0 when off`, `properties › held-back dollars per role …`, `golden › *` (`heldBack ?? 0`).
+
+### 38. Equal splits with no hours now always hold the odd dollar
+
+- **What:** Members with no hours entered all report 0 hours, so an odd dollar in an even split is **always** held: the server or bar keeps it. Examples: Golden 1 barbacks $33 → the server keeps $1; three hosts sharing $11 → $2 held. This replaces #23's bias toward the first-listed member with a bias toward the user, of up to (members − 1) dollars per role per shift.
+- **Why:** It follows the owner's rule, but tipped-out coworkers will see $16 / $16 where the doc showed $16.50 each.
+- **Resolution:** Owner awareness only. The Results screen should state "$1 kept back from barbacks (tie)", using `heldBack`.
+- **Tests:** `golden › *`, `calculate › hours: unequal splits › 3 hosts share $11 › whole dollars by default …`, `properties › members with no hours entered get equal shares (identical in whole dollars, within 1c)`.
+
+### 39. Implementer-owned tests that encode pre-Q7 values
+
+- **What:** Against a stub with the Q7 behaviour, 5 implementer-owned tests fail:
+  - `impl.golden.test.ts`, 4 tests: `golden test 1 … › matches the spec exactly`, `… › reports percentages in 0–100`, `golden test 2 … › retain: …`, `… › redistribute: …`.
+  - `impl.edge.test.ts`, 1 test: `poolBasis: pool as a % of net sales, capped at total tips with a warning`, which expects the old whole-dollar split with no hold.
+- **Resolution:** The implementer updates these on their branch. The tester may not edit them.
+
+---
+
 ## Coverage map vs. the brief
 
 | Brief item                                                              | Where                                                                      |
@@ -279,3 +345,6 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 | `keptChange` + whole-dollar `keptSplit` (owner Q2)                      | `golden.test.ts`, `calculate › keptChange …`, `properties`                 |
 | `poolBasis` + `POOL_EXCEEDS_TIPS` (owner Q4)                            | `calculate › pool basis …`, `properties`                                   |
 | Equal clock-in/out is `INVALID_CLOCK` (owner Q5)                        | `hours.test.ts`, `review.test.ts`, `calculate › equal clock-in and …`      |
+| Odd-dollar rule and held-back dollars (owner Q7)                        | `wholeDollars.test.ts`, `golden`, `calculate › whole-dollar held-back …`   |
+| `ZERO_SHARE_AFTER_ROUNDING` (owner Q8)                                  | `calculate › ZERO_SHARE_AFTER_ROUNDING warning`, `properties`              |
+| `TeamMember.isUser` ignored by the engine (owner Q9)                    | `calculate › TeamMember.isUser …`, `properties`                            |
