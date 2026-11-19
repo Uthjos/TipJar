@@ -420,7 +420,12 @@ export function calculateShift(
     // the role is paid only what its members got, and the dollars count as rounding.
     const paid = amount - split.heldBack;
     heldFromRoles += split.heldBack;
-    if (roundMembers) zeroShares.push(...split.members.filter((m) => m.amount === 0));
+    // Only when the floored pool had at least $1 to hand out (review round 3, #34): an empty
+    // shift giving everyone $0 is not news, but a member whose role rounded to $0 out of a
+    // non-empty pool is. Cent splits never warn (#36): roundMembers is false then.
+    if (roundMembers && flooredPool >= 100) {
+      zeroShares.push(...split.members.filter((m) => m.amount === 0));
+    }
     pool += paid;
     const roleResult: RoleResult = {
       role: rule.role,
@@ -463,7 +468,9 @@ export function calculateShift(
         hours: group.hours[i]!,
         amount: parts[i]!,
       }));
-      if (roundMembers) zeroShares.push(...keptSplit.filter((k) => k.amount === 0));
+      if (roundMembers && floorToDollar(kept) >= 100) {
+        zeroShares.push(...keptSplit.filter((k) => k.amount === 0));
+      }
     } else {
       // No bartenders listed: nothing is shared, so all of kept is unshared "change" and
       // sum(keptSplit) + keptChange == kept still holds (review round 2, finding #20).

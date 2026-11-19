@@ -106,7 +106,13 @@ describe('calculateShift whole-dollar odd-dollar rule', () => {
   });
 
   it('warns ZERO_SHARE_AFTER_ROUNDING for named $0 shares, only with whole-dollar splits', () => {
-    const tiny: ShiftInput = { ...server, totalTips: 300, foodSales: 0, netSales: 1000 };
+    // Review round 3 (#34): no warning when the floored pool is $0 (tips $3 -> pool $0.90 -> $0),
+    // so use tips $10 -> pool $3: bartenders $2, barbacks $1 (tied, held), hosts $0 -> Hannah $0.
+    const empty: ShiftInput = { ...server, totalTips: 300, foodSales: 0, netSales: 1000 };
+    expect(calculateShift(empty, SERVER_DEFAULT_PROFILE).warnings.map((x) => x.code)).not.toContain(
+      'ZERO_SHARE_AFTER_ROUNDING',
+    );
+    const tiny: ShiftInput = { ...server, totalTips: 1000, foodSales: 0, netSales: 1000 };
     const on = calculateShift(tiny, SERVER_DEFAULT_PROFILE);
     const w = on.warnings.find((x) => x.code === 'ZERO_SHARE_AFTER_ROUNDING');
     expect(w).toBeDefined();

@@ -261,3 +261,32 @@ describe('review round 2: POOL_EXCEEDS_TIPS compares the exact pool (#24)', () =
     expect(result.pool).toBe(20000);
   });
 });
+
+describe('review round 3: ZERO_SHARE_AFTER_ROUNDING only when there was $1 to split (#34)', () => {
+  it('no warning on an empty shift (tips 50c: pool and floored kept are both $0)', () => {
+    const input = shiftInput({
+      userRole: 'bartender',
+      totalTips: 50,
+      roundToDollar: true,
+      team: [
+        member('Joseph', 'bartender'),
+        member('Aaron', 'bartender'),
+        member('David', 'barback'),
+        member('Hannah', 'host'),
+      ],
+    });
+    const { result, warnings } = calculateShift(input, BARTENDER_DEFAULT_PROFILE);
+    expect(result.keptSplit?.map((k) => k.amount)).toEqual([0, 0]);
+    expect(warnings.map((w) => w.code)).not.toContain('ZERO_SHARE_AFTER_ROUNDING');
+  });
+
+  it('still warns for a member whose role rounded to $0 out of a non-empty pool', () => {
+    // Tips $10 -> pool $3, no food: 4:3:1 of $3 = 1.5 / 1.125 / 0.375 -> $2 / $1 / $0.
+    const { warnings } = calculateShift(
+      golden1Input({ totalTips: 1000, netSales: 1000, foodSales: 0 }),
+      SERVER_DEFAULT_PROFILE,
+    );
+    const w = warnings.find((x) => x.code === 'ZERO_SHARE_AFTER_ROUNDING');
+    expect(w?.message).toContain('Hannah');
+  });
+});
