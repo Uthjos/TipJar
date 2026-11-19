@@ -1,6 +1,10 @@
 /**
  * Property-based tests (fast-check) for the calc engine invariants in CLAUDE.md §5.
  * Runs are seeded so the suite is deterministic; bump NUM_RUNS locally to fuzz harder.
+ *
+ * Owner decisions (2026-11-18) encoded here: whole-dollar member shares and keptSplit when
+ * rounding is on (roundMemberShares defaults to true), keptChange, and poolBasis with the
+ * POOL_EXCEEDS_TIPS cap.
  */
 import * as fc from 'fast-check';
 import { calculateShift } from '../calculate';
@@ -16,10 +20,13 @@ const PARAMS = { seed: SEED, numRuns: NUM_RUNS };
 const SHARE_ROLE_POOL = ['barback', 'host', 'busser', 'bartender'] as const;
 type HoursMode = 'none' | 'hours' | 'clock';
 
+type PoolBasis = 'totalTips' | 'netSales' | 'foodSales';
+
 interface Case {
   input: ShiftInput;
   profile: TipOutProfile;
-  roundMemberShares: boolean;
+  /** undefined exercises the engine default (true). */
+  roundMemberShares: boolean | undefined;
 }
 
 const pct = (max: number) =>
@@ -57,7 +64,13 @@ const rawCaseArb = fc.record({
     'redistribute' | 'retain'
   >,
   roundToDollar: fc.boolean(),
-  roundMemberShares: fc.boolean(),
+  roundMemberShares: fc.constantFrom<boolean | undefined>(undefined, true, false),
+  poolBasis: fc.constantFrom<PoolBasis | undefined>(
+    undefined,
+    'totalTips',
+    'netSales',
+    'foodSales',
+  ),
 });
 
 const BASE_MS = Date.UTC(2026, 10, 17, 0, 0, 0);
@@ -100,6 +113,7 @@ function buildCase(r: RawCase): Case {
       name: 'Property custom',
       appliesTo: r.userRole,
       totalTipOutPercentOfTips: r.poolPercent,
+      ...(r.poolBasis ? { poolBasis: r.poolBasis } : {}),
       rules,
     };
   }
@@ -138,12 +152,27 @@ function buildCase(r: RawCase): Case {
 
 const caseArb = rawCaseArb.map(buildCase);
 
-const run = (c: Case, overrides: Partial<ShiftInput> = {}) =>
-  calculateShift({ ...c.input, ...overrides }, c.profile, {
-    roundMemberShares: c.roundMemberShares,
-  }).result;
+const runFull = (c: Case, overrides: Partial<ShiftInput> = {}) =>
+  calculateShift(
+    { ...c.input, ...overrides },
+    c.profile,
+    c.roundMemberShares === undefined ? {} : { roundMemberShares: c.roundMemberShares },
+  );
 
-const exactPool = (c: Case) => (c.input.totalTips * c.profile.totalTipOutPercentOfTips) / 100;
+const run = (c: Case, overrides: Partial<ShiftInput> = {}) => runFull(c, overrides).result;
+
+/** Whole-dollar member shares / keptSplit apply: rounding on and roundMemberShares not false. */
+const wholeDollarShares = (c: Case, roundToDollar = c.input.roundToDollar) =>
+  roundToDollar && c.roundMemberShares !== false;
+
+/** The pool before any cap: poolBasis x percent / 100 (fractional cents). */
+const rawPool = (c: Case) => {
+  const basis = c.profile.poolBasis ?? 'totalTips';
+  return (c.input[basis] * c.profile.totalTipOutPercentOfTips) / 100;
+};
+
+/** The exact pool after the POOL_EXCEEDS_TIPS cap. */
+const exactPool = (c: Case) => Math.min(c.input.totalTips, rawPool(c));
 
 function allAmounts(res: ShiftResult): number[] {
   return [
@@ -151,6 +180,7 @@ function allAmounts(res: ShiftResult): number[] {
     res.kept,
     res.retained,
     res.roundingAdjustment,
+    res.keptChange,
     ...res.roles.map((r) => r.amount),
     ...res.roles.flatMap((r) => r.members.map((m) => m.amount)),
     ...(res.keptSplit ?? []).map((k) => k.amount),
@@ -177,7 +207,7 @@ describe('calculateShift properties', () => {
         expect(paid).toBe(res.pool);
         expect(paid + res.retained).toBeLessThanOrEqual(unrounded);
         expect(unrounded).toBeLessThanOrEqual(c.input.totalTips);
-        // the unrounded cent pool is the exact percentage rounded to the nearest cent
+        // the unrounded cent pool is the exact (capped) percentage rounded to the nearest cent
         expect(Math.abs(unrounded - exactPool(c))).toBeLessThanOrEqual(0.5 + 1e-6);
       }),
       PARAMS,
@@ -208,7 +238,7 @@ describe('calculateShift properties', () => {
     );
   });
 
-  it('keptSplit sums to kept (bartender flow) and is absent in the server flow', () => {
+  it('sum(keptSplit) + keptChange == kept (bartender flow); server flow has no keptSplit', () => {
     fc.assert(
       fc.property(caseArb, (c) => {
         const res = run(c);
@@ -216,10 +246,41 @@ describe('calculateShift properties', () => {
           const bartenders = c.input.team.filter((m) => m.role === 'bartender');
           expect(res.keptSplit).toBeDefined();
           expect(res.keptSplit!.map((k) => k.memberId)).toEqual(bartenders.map((m) => m.id));
-          expect(sum(res.keptSplit!.map((k) => k.amount))).toBe(res.kept);
+          expect(sum(res.keptSplit!.map((k) => k.amount)) + res.keptChange).toBe(res.kept);
         } else {
           expect(res.keptSplit).toBeUndefined();
+          expect(res.keptChange).toBe(0);
         }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('0 <= keptChange < 100; it is kept % 100 with whole-dollar shares, else 0', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c);
+        expect(Number.isInteger(res.keptChange)).toBe(true);
+        expect(res.keptChange).toBeGreaterThanOrEqual(0);
+        expect(res.keptChange).toBeLessThan(100);
+        if (c.input.userRole === 'bartender' && wholeDollarShares(c)) {
+          expect(res.keptChange).toBe(res.kept % 100);
+        } else {
+          expect(res.keptChange).toBe(0);
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('keptChange never changes kept: kept is the same with or without whole-dollar shares', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const whole = calculateShift(c.input, c.profile, { roundMemberShares: true }).result;
+        const cents = calculateShift(c.input, c.profile, { roundMemberShares: false }).result;
+        expect(whole.kept).toBe(cents.kept);
+        expect(whole.pool).toBe(cents.pool);
+        expect(whole.roles.map((r) => r.amount)).toEqual(cents.roles.map((r) => r.amount));
       }),
       PARAMS,
     );
@@ -258,15 +319,35 @@ describe('calculateShift properties', () => {
     );
   });
 
-  it('with rounding on, every role amount is a whole dollar (and members too with roundMemberShares)', () => {
+  it('with rounding on, role, member and keptSplit amounts are whole dollars (unless roundMemberShares: false)', () => {
     fc.assert(
       fc.property(caseArb, (c) => {
         const res = run(c, { roundToDollar: true });
         expect((res.pool + res.retained) % 100).toBe(0);
+        const whole = wholeDollarShares(c, true);
         for (const r of res.roles) {
           expect(r.amount % 100).toBe(0);
-          if (c.roundMemberShares) for (const m of r.members) expect(m.amount % 100).toBe(0);
+          if (whole) for (const m of r.members) expect(m.amount % 100).toBe(0);
         }
+        if (whole) for (const k of res.keptSplit ?? []) expect(k.amount % 100).toBe(0);
+      }),
+      PARAMS,
+    );
+  });
+
+  it('a pool over total tips is capped and warns POOL_EXCEEDS_TIPS; otherwise no such warning', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const { result, warnings } = runFull(c);
+        const codes = warnings.map((w) => w.code);
+        const raw = rawPool(c);
+        expect(result.pool + result.retained + result.roundingAdjustment).toBeLessThanOrEqual(
+          c.input.totalTips,
+        );
+        // Strictly above tips by more than the half-cent rounding band -> must warn.
+        // At or below tips -> must not warn. (The band in between is finding #24.)
+        if (raw > c.input.totalTips + 0.5) expect(codes).toContain('POOL_EXCEEDS_TIPS');
+        if (raw <= c.input.totalTips) expect(codes).not.toContain('POOL_EXCEEDS_TIPS');
       }),
       PARAMS,
     );
@@ -301,7 +382,7 @@ describe('calculateShift properties', () => {
     fc.assert(
       fc.property(caseArb, (c) => {
         const res = run(c);
-        const tol = c.input.roundToDollar && c.roundMemberShares ? 100 : 1;
+        const tol = wholeDollarShares(c) ? 100 : 1;
         for (const r of res.roles) {
           const ids = new Set(r.members.map((m) => m.memberId));
           const anyHours = c.input.team.some(

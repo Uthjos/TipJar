@@ -60,8 +60,13 @@ describe('review: clock and hours validation', () => {
       member('Allen', 'barback', { id: 'allen', hours: 0 }),
     ];
     const { result } = calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE);
-    // Golden 1 barbacks $33 split $16.50 / $16.50, same as with no hours entered.
-    expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 1650, allen: 1650 });
+    // Golden 1 barbacks $33, same as with no hours entered: whole dollars by default
+    // (owner Q1) -> $17 / $16; to the cent with roundMemberShares: false -> $16.50 / $16.50.
+    expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 1700, allen: 1600 });
+    const cents = calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE, {
+      roundMemberShares: false,
+    }).result;
+    expect(memberAmounts(roleOf(cents, 'barback'))).toEqual({ david: 1650, allen: 1650 });
   });
 
   // #15: members of an equal-split role report hours 0.

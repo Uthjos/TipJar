@@ -25,7 +25,12 @@ export function member(
   return { id: extra.id ?? `${role}-${name.toLowerCase()}-${autoId}`, name, role, ...extra };
 }
 
-/** Build a ShiftInput with sensible defaults (server flow, rounding off, redistribute). */
+/**
+ * Build a ShiftInput with sensible defaults (server flow, rounding off, redistribute).
+ * Note: the app's store now defaults missingRoleHandling to 'retain' (owner Q3), but the engine
+ * always receives it explicitly; this builder keeps 'redistribute' so existing hand-worked
+ * expectations stay valid. Tests that depend on it pass it explicitly where it matters.
+ */
 export function shiftInput(overrides: Partial<ShiftInput> = {}): ShiftInput {
   return {
     date: '2026-11-17',

@@ -123,14 +123,24 @@ describe('rounding OFF', () => {
     expect(roleOf(result, 'host')).toMatchObject({ amount: 1384, missing: true, members: [] });
     expect(result.kept).toBe(14862);
     expect(keptSplitAmounts(result)).toEqual({ joseph: 7431, aaron: 7431 });
+    // §5.4 step 5: with rounding off, keptSplit is to the cent and keptChange is 0.
+    expect(result.keptChange).toBe(0);
   });
 
-  it('roundMemberShares has no effect when roundToDollar is off', () => {
-    // ASSUMPTION (findings #4): roundMemberShares only applies under §5.4 rounding.
-    const input = golden1Input({ roundToDollar: false });
-    const a = calculateShift(input, SERVER_DEFAULT_PROFILE).result;
-    const b = calculateShift(input, SERVER_DEFAULT_PROFILE, { roundMemberShares: true }).result;
-    expect(b).toEqual(a);
+  it('roundMemberShares has no effect when roundToDollar is off (default, true or false)', () => {
+    // §5.4 steps 4-5: member and keptSplit rounding only apply under whole-dollar rounding.
+    const cases = [
+      [golden1Input({ roundToDollar: false }), SERVER_DEFAULT_PROFILE],
+      [golden2Input({ roundToDollar: false }), BARTENDER_DEFAULT_PROFILE],
+    ] as const;
+    for (const [input, p] of cases) {
+      const dflt = calculateShift(input, p).result;
+      const on = calculateShift(input, p, { roundMemberShares: true }).result;
+      const off = calculateShift(input, p, { roundMemberShares: false }).result;
+      expect(on).toEqual(dflt);
+      expect(off).toEqual(dflt);
+      expect(dflt.keptChange).toBe(0);
+    }
   });
 });
 
@@ -148,6 +158,28 @@ describe('rounding ON (§5.4)', () => {
   it('every role amount is a whole dollar', () => {
     const { result } = calculateShift(golden1Input(), SERVER_DEFAULT_PROFILE);
     for (const r of result.roles) expect(r.amount % 100).toBe(0);
+  });
+
+  it('member shares are whole dollars by default (owner Q1); false gives cent splits', () => {
+    const dflt = calculateShift(golden1Input(), SERVER_DEFAULT_PROFILE).result;
+    const explicit = calculateShift(golden1Input(), SERVER_DEFAULT_PROFILE, {
+      roundMemberShares: true,
+    }).result;
+    expect(explicit).toEqual(dflt);
+    for (const r of dflt.roles) for (const m of r.members) expect(m.amount % 100).toBe(0);
+    const cents = calculateShift(golden1Input(), SERVER_DEFAULT_PROFILE, {
+      roundMemberShares: false,
+    }).result;
+    // barbacks $33: whole dollars 17 / 16, cents 16.50 / 16.50; role amounts identical
+    expect(memberAmounts(roleOf(dflt, 'barback'))).toEqual({ david: 1700, allen: 1600 });
+    expect(memberAmounts(roleOf(cents, 'barback'))).toEqual({ david: 1650, allen: 1650 });
+    expect(cents.roles.map((r) => r.amount)).toEqual(dflt.roles.map((r) => r.amount));
+  });
+
+  it('server flow: keptChange is always 0 and keptSplit is absent', () => {
+    const { result } = calculateShift(golden1Input(), SERVER_DEFAULT_PROFILE);
+    expect(result.keptChange).toBe(0);
+    expect(result.keptSplit).toBeUndefined();
   });
 
   it('a pool already on a whole dollar has roundingAdjustment 0', () => {
@@ -174,11 +206,12 @@ describe('rounding ON (§5.4)', () => {
 });
 
 describe('hours: unequal splits (F4)', () => {
-  it('splits tip-out role amounts by hours', () => {
+  it('splits tip-out role amounts by hours (whole dollars by default)', () => {
     /*
-     * Golden 1 role amounts (bartender 4400, barback 3300) are independent of hours.
-     * bartenders 5h / 3h -> 4400 x 5/8 = 2750, 1650
-     * barbacks   6h / 3h -> 3300 x 2/3 = 2200, 1100
+     * Golden 1 role amounts (bartender $44, barback $33) are independent of hours.
+     * bartenders 5h / 3h -> $44 x 5/8 = 27.5, 16.5 -> floors 43, $1 left, tie .5/.5 -> Joseph
+     *   -> 2800 / 1600
+     * barbacks   6h / 3h -> $33 x 2/3 = 22, 11 -> 2200 / 1100
      */
     const team = [
       member('Joseph', 'bartender', { id: 'joseph', hours: 5 }),
@@ -189,30 +222,66 @@ describe('hours: unequal splits (F4)', () => {
     ];
     const { result } = calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE);
     expect(roleOf(result, 'bartender').amount).toBe(4400);
-    expect(memberAmounts(roleOf(result, 'bartender'))).toEqual({ joseph: 2750, aaron: 1650 });
+    expect(memberAmounts(roleOf(result, 'bartender'))).toEqual({ joseph: 2800, aaron: 1600 });
     expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 2200, allen: 1100 });
     expect(roleOf(result, 'barback').members.map((m) => m.hours)).toEqual([6, 3]);
   });
 
-  it('equal split with leftover cents goes to earlier members (3 hosts share $11)', () => {
-    // 1100 / 3 = 366.67 -> 367, 367, 366
+  it('splits tip-out role amounts by hours to the cent with roundMemberShares: false', () => {
+    // bartenders 5h / 3h -> 4400 x 5/8 = 2750, 1650
     const team = [
+      member('Joseph', 'bartender', { id: 'joseph', hours: 5 }),
+      member('Aaron', 'bartender', { id: 'aaron', hours: 3 }),
+      ...withoutRole(golden1Team(), 'bartender'),
+    ];
+    const { result } = calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE, {
+      roundMemberShares: false,
+    });
+    expect(memberAmounts(roleOf(result, 'bartender'))).toEqual({ joseph: 2750, aaron: 1650 });
+  });
+
+  describe('3 hosts share $11', () => {
+    const team = () => [
       ...withoutRole(golden1Team(), 'host'),
       member('Hannah', 'host', { id: 'hannah' }),
       member('Mia', 'host', { id: 'mia' }),
       member('Zoe', 'host', { id: 'zoe' }),
     ];
-    const { result } = calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE);
-    expect(roleOf(result, 'host').amount).toBe(1100);
-    expect(roleOf(result, 'host').members.map((m) => [m.memberId, m.amount])).toEqual([
-      ['hannah', 367],
-      ['mia', 367],
-      ['zoe', 366],
-    ]);
+    const hostSplit = (opts?: { roundMemberShares?: boolean }) => {
+      const { result } = calculateShift(
+        golden1Input({ team: team() }),
+        SERVER_DEFAULT_PROFILE,
+        opts,
+      );
+      expect(roleOf(result, 'host').amount).toBe(1100);
+      return roleOf(result, 'host').members.map((m) => [m.memberId, m.amount]);
+    };
+
+    it('whole dollars by default: leftover dollars go to earlier members', () => {
+      // $11 / 3 = 3.67 -> floors 9, $2 left, ties -> Hannah, Mia -> 400, 400, 300
+      expect(hostSplit()).toEqual([
+        ['hannah', 400],
+        ['mia', 400],
+        ['zoe', 300],
+      ]);
+    });
+
+    it('to the cent with roundMemberShares: false: leftover cents go to earlier members', () => {
+      // 1100 / 3 = 366.67 -> 367, 367, 366
+      expect(hostSplit({ roundMemberShares: false })).toEqual([
+        ['hannah', 367],
+        ['mia', 367],
+        ['zoe', 366],
+      ]);
+    });
   });
 
-  it("splits the bar's kept tips by hours (keptSplit)", () => {
-    // Golden 2 kept 14955; Joseph 6h / Aaron 4h -> 8973 / 5982
+  it("splits the bar's kept tips by hours in whole dollars (keptSplit + keptChange)", () => {
+    /*
+     * Golden 2 kept 14955 -> floorToDollar 14900, keptChange 55.
+     * Joseph 6h / Aaron 4h: $149 x 0.6 = 89.4, x 0.4 = 59.6 -> floors 148, $1 left -> Aaron (.6)
+     *   -> 8900 / 6000
+     */
     const team = [
       member('Joseph', 'bartender', { id: 'joseph', hours: 6 }),
       member('Aaron', 'bartender', { id: 'aaron', hours: 4 }),
@@ -221,12 +290,28 @@ describe('hours: unequal splits (F4)', () => {
     ];
     const { result } = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE);
     expect(result.kept).toBe(14955);
-    expect(keptSplitAmounts(result)).toEqual({ joseph: 8973, aaron: 5982 });
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 8900, aaron: 6000 });
+    expect(result.keptChange).toBe(55);
     expect(result.keptSplit!.map((k) => k.hours)).toEqual([6, 4]);
   });
 
-  it('keptSplit leftover cent tie goes to the first bartender', () => {
-    // 14955 x 7/10 = 10468.5, x 3/10 = 4486.5 -> tie -> Joseph 10469, Aaron 4486
+  it("splits the bar's kept tips by hours to the cent with roundMemberShares: false", () => {
+    // Golden 2 kept 14955; Joseph 6h / Aaron 4h -> 8973 / 5982, keptChange 0
+    const team = [
+      member('Joseph', 'bartender', { id: 'joseph', hours: 6 }),
+      member('Aaron', 'bartender', { id: 'aaron', hours: 4 }),
+      member('David', 'barback', { id: 'david' }),
+      member('Allen', 'barback', { id: 'allen' }),
+    ];
+    const { result } = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE, {
+      roundMemberShares: false,
+    });
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 8973, aaron: 5982 });
+    expect(result.keptChange).toBe(0);
+  });
+
+  it('keptSplit in whole dollars by hours 7:3 (largest remainder, not first-member bias)', () => {
+    // $149 x 0.7 = 104.3, x 0.3 = 44.7 -> floors 148, $1 left -> Aaron (.7) -> 10400 / 4500
     const team = [
       member('Joseph', 'bartender', { id: 'joseph', hours: 7 }),
       member('Aaron', 'bartender', { id: 'aaron', hours: 3 }),
@@ -234,11 +319,27 @@ describe('hours: unequal splits (F4)', () => {
       member('Allen', 'barback', { id: 'allen' }),
     ];
     const { result } = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE);
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 10400, aaron: 4500 });
+    expect(result.keptChange).toBe(55);
+  });
+
+  it('keptSplit leftover cent tie goes to the first bartender (roundMemberShares: false)', () => {
+    // 14955 x 7/10 = 10468.5, x 3/10 = 4486.5 -> tie -> Joseph 10469, Aaron 4486
+    const team = [
+      member('Joseph', 'bartender', { id: 'joseph', hours: 7 }),
+      member('Aaron', 'bartender', { id: 'aaron', hours: 3 }),
+      member('David', 'barback', { id: 'david' }),
+      member('Allen', 'barback', { id: 'allen' }),
+    ];
+    const { result } = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE, {
+      roundMemberShares: false,
+    });
     expect(keptSplitAmounts(result)).toEqual({ joseph: 10469, aaron: 4486 });
   });
 
-  it('three bartenders share kept equally by default', () => {
-    // 14955 / 3 = 4985 exactly
+  it('three bartenders share kept equally: whole dollars by default, cents when false', () => {
+    // whole dollars: $149 / 3 = 49.67 -> floors 147, $2 left -> Joseph, Aaron -> 5000/5000/4900
+    // cents: 14955 / 3 = 4985 exactly
     const team = [
       member('Joseph', 'bartender', { id: 'joseph' }),
       member('Aaron', 'bartender', { id: 'aaron' }),
@@ -246,8 +347,14 @@ describe('hours: unequal splits (F4)', () => {
       member('David', 'barback', { id: 'david' }),
       member('Allen', 'barback', { id: 'allen' }),
     ];
-    const { result } = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE);
-    expect(keptSplitAmounts(result)).toEqual({ joseph: 4985, aaron: 4985, maya: 4985 });
+    const dollars = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE).result;
+    expect(keptSplitAmounts(dollars)).toEqual({ joseph: 5000, aaron: 5000, maya: 4900 });
+    expect(dollars.keptChange).toBe(55);
+    const cents = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE, {
+      roundMemberShares: false,
+    }).result;
+    expect(keptSplitAmounts(cents)).toEqual({ joseph: 4985, aaron: 4985, maya: 4985 });
+    expect(cents.keptChange).toBe(0);
   });
 
   it('hours are judged per role: one role with hours, another without, is fine', () => {
@@ -259,7 +366,8 @@ describe('hours: unequal splits (F4)', () => {
       member('Hannah', 'host', { id: 'hannah' }),
     ];
     const { result } = calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE);
-    expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 1650, allen: 1650 });
+    // barbacks: no hours -> equal split of $33 in whole dollars -> 17 / 16
+    expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 1700, allen: 1600 });
   });
 
   it('a member with hours: 0 alongside others gets nothing', () => {
@@ -296,7 +404,7 @@ describe('hours: clock-in / clock-out across midnight (F4)', () => {
   });
 
   it('splits keptSplit by overnight clock times (proper next-day dates)', () => {
-    // Joseph 20:00 -> 02:00 (6h), Aaron 22:00 -> 02:00 (4h): 14955 -> 8973 / 5982
+    // Joseph 20:00 -> 02:00 (6h), Aaron 22:00 -> 02:00 (4h)
     const team = [
       member('Joseph', 'bartender', {
         id: 'joseph',
@@ -312,7 +420,9 @@ describe('hours: clock-in / clock-out across midnight (F4)', () => {
       member('Allen', 'barback', { id: 'allen' }),
     ];
     const { result } = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE);
-    expect(keptSplitAmounts(result)).toEqual({ joseph: 8973, aaron: 5982 });
+    // 6h / 4h of $149 -> 8900 / 6000 (see the hours test above); change 55
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 8900, aaron: 6000 });
+    expect(result.keptChange).toBe(55);
   });
 
   it('treats a same-date clock-out earlier than clock-in as next day', () => {
@@ -332,7 +442,9 @@ describe('hours: clock-in / clock-out across midnight (F4)', () => {
       member('Allen', 'barback', { id: 'allen' }),
     ];
     const { result } = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE);
-    expect(keptSplitAmounts(result)).toEqual({ joseph: 8973, aaron: 5982 });
+    // 6h / 4h of $149 -> 8900 / 6000 (see the hours test above); change 55
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 8900, aaron: 6000 });
+    expect(result.keptChange).toBe(55);
   });
 
   it('mixes `hours` and clock times within one role', () => {
@@ -347,7 +459,9 @@ describe('hours: clock-in / clock-out across midnight (F4)', () => {
       member('Allen', 'barback', { id: 'allen' }),
     ];
     const { result } = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE);
-    expect(keptSplitAmounts(result)).toEqual({ joseph: 8973, aaron: 5982 });
+    // 6h / 4h of $149 -> 8900 / 6000 (see the hours test above); change 55
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 8900, aaron: 6000 });
+    expect(result.keptChange).toBe(55);
   });
 });
 
@@ -419,6 +533,7 @@ describe('missing roles (§5.1 step 3)', () => {
     expect(result.pool).toBe(9100);
     expect(result.kept).toBe(24956);
     expect(result.keptSplit).toBeUndefined();
+    expect(result.keptChange).toBe(0);
   });
 
   it("server, no host, 'redistribute' (rounding on): host share goes to bartenders/barbacks 4:3", () => {
@@ -527,7 +642,9 @@ describe('zero food sales', () => {
     expect(roleOf(result, 'bartender').amount).toBe(5100);
     expect(roleOf(result, 'barback').amount).toBe(3800);
     expect(roleOf(result, 'host').amount).toBe(1300);
-    expect(memberAmounts(roleOf(result, 'bartender'))).toEqual({ joseph: 2550, aaron: 2550 });
+    // whole-dollar members: $51 / 2 -> 26 / 25; $38 / 2 -> 19 / 19
+    expect(memberAmounts(roleOf(result, 'bartender'))).toEqual({ joseph: 2600, aaron: 2500 });
+    expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 1900, allen: 1900 });
     expect(result.pool).toBe(10200);
     expect(warnings).toEqual([]);
   });
@@ -579,6 +696,7 @@ describe('zero tips', () => {
     );
     expect(result.kept).toBe(0);
     expect(keptSplitAmounts(result)).toEqual({ joseph: 0, aaron: 0 });
+    expect(result.keptChange).toBe(0);
   });
 
   it('with food sales, KTO is capped at the $0 pool and a warning is raised', () => {
@@ -681,6 +799,7 @@ describe('custom profiles (F3)', () => {
     expect(roleOf(result, 'host').amount).toBe(1500);
     expect(result.kept).toBe(24000);
     expect(keptSplitAmounts(result)).toEqual({ me: 8000, joseph: 8000, aaron: 8000 });
+    expect(result.keptChange).toBe(0); // rounding off
   });
 
   it('supports custom role ids', () => {
@@ -927,6 +1046,334 @@ describe('validation errors (§5.3)', () => {
       () => calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE),
       'INVALID_CLOCK',
     );
+  });
+});
+
+describe('keptChange: whole-dollar keptSplit in the bartender flow (owner Q2, §5.4 step 5)', () => {
+  it('splits floorToDollar(kept) and reports the cents as keptChange', () => {
+    /*
+     * tips $3.55, food 0, Bartender default, rounding on, retain (no host)
+     * pool exact 30% x 355 = 106.5 -> 107c -> floor 100 (roundingAdjustment 7)
+     * $1 allocated over KTO 0 / barback 79.875c / host 26.625c (scaled: .75 / .25)
+     *   -> barback $1, host $0 (missing, retained 0)
+     * pool paid 100, retained 0, kept 355 - 100 = 255
+     * keptSplit: floorToDollar(255) = 200 -> $1 / $1; keptChange 55
+     * barback members: $1 / 2 in whole dollars -> David 100, Allen 0
+     */
+    const { result } = calculateShift(
+      golden2Input({ totalTips: 355, netSales: 1000, foodSales: 0 }),
+      BARTENDER_DEFAULT_PROFILE,
+    );
+    expect(result.pool).toBe(100);
+    expect(result.roundingAdjustment).toBe(7);
+    expect(result.kept).toBe(255);
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 100, aaron: 100 });
+    expect(result.keptChange).toBe(55);
+    expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 100, allen: 0 });
+  });
+
+  it('kept under $1: keptSplit is all zeros and everything is change', () => {
+    // tips 50c -> pool 15c -> floor 0; kept 50; floorToDollar(50) = 0; keptChange 50
+    const { result } = calculateShift(
+      golden2Input({ totalTips: 50, netSales: 1000, foodSales: 0 }),
+      BARTENDER_DEFAULT_PROFILE,
+    );
+    expect(result.pool).toBe(0);
+    expect(result.kept).toBe(50);
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 0, aaron: 0 });
+    expect(result.keptChange).toBe(50);
+  });
+
+  it('kept already a whole dollar: keptChange 0', () => {
+    // 0% pool: kept = tips = 10000 -> 5000 / 5000, change 0
+    const p = profile({
+      appliesTo: 'bartender',
+      totalTipOutPercentOfTips: 0,
+      rules: [{ role: 'barback', type: 'shareOfRemainder', weight: 1 }],
+    });
+    const { result } = calculateShift(golden2Input({ totalTips: 10000, profileId: 'custom' }), p);
+    expect(result.kept).toBe(10000);
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 5000, aaron: 5000 });
+    expect(result.keptChange).toBe(0);
+  });
+
+  it('kept is never reduced by keptChange (kept + pool == totalTips)', () => {
+    const { result } = calculateShift(golden2Input(), BARTENDER_DEFAULT_PROFILE);
+    expect(result.kept + result.pool).toBe(19255);
+    expect(sum(result.keptSplit!.map((k) => k.amount)) + result.keptChange).toBe(result.kept);
+  });
+});
+
+describe('pool basis (owner Q4, §5.1 step 1)', () => {
+  // Server profile: pool = 5% of the chosen basis; KTO 2% of food; bartender 1 : host 1.
+  const salesProfile = (
+    poolBasis: 'totalTips' | 'netSales' | 'foodSales' | undefined,
+    pct: number,
+  ): TipOutProfile =>
+    profile({
+      appliesTo: 'server',
+      totalTipOutPercentOfTips: pct,
+      ...(poolBasis ? { poolBasis } : {}),
+      rules: [
+        { role: 'kitchen', type: 'percentOfBasis', basis: 'foodSales', percent: 2 },
+        { role: 'bartender', type: 'shareOfRemainder', weight: 1 },
+        { role: 'host', type: 'shareOfRemainder', weight: 1 },
+      ],
+    });
+  const team = () => [
+    member('Joseph', 'bartender', { id: 'joseph' }),
+    member('Aaron', 'bartender', { id: 'aaron' }),
+    member('Hannah', 'host', { id: 'hannah' }),
+  ];
+  const input = (overrides: Partial<Parameters<typeof shiftInput>[0]> = {}) =>
+    shiftInput({
+      totalTips: 20000,
+      netSales: 150000,
+      foodSales: 50000,
+      team: team(),
+      profileId: 'custom',
+      missingRoleHandling: 'retain',
+      ...overrides,
+    });
+
+  it('both default profiles use total tips as the pool basis', () => {
+    expect(SERVER_DEFAULT_PROFILE.poolBasis ?? 'totalTips').toBe('totalTips');
+    expect(BARTENDER_DEFAULT_PROFILE.poolBasis ?? 'totalTips').toBe('totalTips');
+  });
+
+  it("poolBasis 'totalTips' (explicit) gives exactly the same output as omitting it", () => {
+    const implicit = calculateShift(golden1Input(), SERVER_DEFAULT_PROFILE);
+    const explicit = calculateShift(golden1Input(), {
+      ...SERVER_DEFAULT_PROFILE,
+      poolBasis: 'totalTips',
+    });
+    expect(explicit).toEqual(implicit);
+    expect(explicit.result.pool).toBe(10200);
+  });
+
+  it('netSales basis, rounding off', () => {
+    /*
+     * pool = 5% x 150000 = 7500 (<= tips 20000, no cap)
+     * KTO 2% x 50000 = 1000; remainder 6500 split 1:1 -> 3250 / 3250
+     * bartender members 3250 / 2 -> 1625 / 1625
+     * kept = 20000 - 7500 = 12500; pool is 37.5% of tips and 5% of net sales
+     */
+    const { result, warnings } = calculateShift(input(), salesProfile('netSales', 5));
+    expect(result.pool).toBe(7500);
+    expect(result.roundingAdjustment).toBe(0);
+    expect(roleOf(result, 'kitchen').amount).toBe(1000);
+    expect(roleOf(result, 'bartender').amount).toBe(3250);
+    expect(memberAmounts(roleOf(result, 'bartender'))).toEqual({ joseph: 1625, aaron: 1625 });
+    expect(roleOf(result, 'host').amount).toBe(3250);
+    expect(result.kept).toBe(12500);
+    expect(result.poolPercentOfTips).toBeCloseTo(37.5, 10);
+    expect(result.poolPercentOfNetSales).toBeCloseTo(5, 10);
+    expect(warnings).toEqual([]);
+  });
+
+  it('netSales basis, rounding on', () => {
+    /*
+     * pool exact = 5% x 150025 = 7501.25 -> 7501c -> floor 7500, roundingAdjustment 1
+     * KTO exact 1000 ($10.00); remainder 7501.25 - 1000 = 6501.25 -> 3250.625 each
+     * whole dollars: weights [10, 32.50625, 32.50625] scaled to $75 -> 9.998 / 32.501 / 32.501
+     *   floors 73, $2 left -> KTO (.998), then the tie -> bartender (earlier rule)
+     *   -> $10 / $33 / $32
+     * bartender members $33 / 2 -> 1700 / 1600; kept = 20000 - 7500 = 12500
+     */
+    const { result } = calculateShift(
+      input({ netSales: 150025, roundToDollar: true }),
+      salesProfile('netSales', 5),
+    );
+    expect(result.pool).toBe(7500);
+    expect(result.roundingAdjustment).toBe(1);
+    expect(roleOf(result, 'kitchen').amount).toBe(1000);
+    expect(roleOf(result, 'bartender').amount).toBe(3300);
+    expect(roleOf(result, 'host').amount).toBe(3200);
+    expect(memberAmounts(roleOf(result, 'bartender'))).toEqual({ joseph: 1700, aaron: 1600 });
+    expect(result.kept).toBe(12500);
+    expect(result.keptChange).toBe(0); // server flow
+  });
+
+  it('a sales-based pool above total tips is capped at total tips and warns POOL_EXCEEDS_TIPS', () => {
+    /*
+     * pool = 30% x 150000 = 45000 > tips 20000 -> capped 20000
+     * KTO 1000; remainder 19000 -> 9500 / 9500; bartender members 4750 / 4750; kept 0
+     */
+    const { result, warnings } = calculateShift(input(), salesProfile('netSales', 30));
+    expect(result.pool).toBe(20000);
+    expect(roleOf(result, 'kitchen').amount).toBe(1000);
+    expect(roleOf(result, 'bartender').amount).toBe(9500);
+    expect(memberAmounts(roleOf(result, 'bartender'))).toEqual({ joseph: 4750, aaron: 4750 });
+    expect(roleOf(result, 'host').amount).toBe(9500);
+    expect(result.kept).toBe(0);
+    expect(warnings.map((w) => w.code)).toEqual(['POOL_EXCEEDS_TIPS']);
+    expect(at(warnings, 0).message.length).toBeGreaterThan(0);
+  });
+
+  it('capped pool with rounding on: floor of the capped pool, change stays with the user', () => {
+    /*
+     * pool = 30% x 150000 = 45000 > tips 20050 -> capped 20050 -> floor 20000, adjustment 50
+     * KTO exact 1000; remainder exact 20050 - 1000 = 19050 -> 9525 each
+     * whole dollars: weights [10, 95.25, 95.25] scaled to $200 -> 9.975 / 95.012 / 95.012
+     *   floors 199, $1 left -> KTO (.975) -> $10 / $95 / $95
+     * kept = 20050 - 20000 = 50
+     */
+    const { result, warnings } = calculateShift(
+      input({ totalTips: 20050, roundToDollar: true }),
+      salesProfile('netSales', 30),
+    );
+    expect(result.pool).toBe(20000);
+    expect(result.roundingAdjustment).toBe(50);
+    expect(roleOf(result, 'bartender').amount).toBe(9500);
+    expect(roleOf(result, 'host').amount).toBe(9500);
+    expect(result.kept).toBe(50);
+    expect(warnings.map((w) => w.code)).toContain('POOL_EXCEEDS_TIPS');
+  });
+
+  it('a sales-based pool exactly equal to total tips does not warn', () => {
+    // 20% x 100000 = 20000 = tips
+    const { result, warnings } = calculateShift(
+      input({ netSales: 100000 }),
+      salesProfile('netSales', 20),
+    );
+    expect(result.pool).toBe(20000);
+    expect(warnings).toEqual([]);
+  });
+
+  it('a sales-based pool with zero tips is capped at $0 and warns', () => {
+    // 5% x 150000 = 7500 > tips 0 -> pool 0 (KTO 1000 also exceeds the $0 pool)
+    const { result, warnings } = calculateShift(
+      input({ totalTips: 0 }),
+      salesProfile('netSales', 5),
+    );
+    expect(result.pool).toBe(0);
+    expect(result.kept).toBe(0);
+    for (const r of result.roles) expect(r.amount).toBe(0);
+    expect(warnings.map((w) => w.code)).toContain('POOL_EXCEEDS_TIPS');
+  });
+
+  it('foodSales basis', () => {
+    /*
+     * pool = 10% x food 80000 = 8000 (<= tips 30000)
+     * KTO 2% x 80000 = 1600; remainder 6400 -> bartender 3200 / host 3200
+     * bartender members 1600 / 1600; kept = 30000 - 8000 = 22000
+     */
+    const { result, warnings } = calculateShift(
+      input({ totalTips: 30000, netSales: 200000, foodSales: 80000 }),
+      salesProfile('foodSales', 10),
+    );
+    expect(result.pool).toBe(8000);
+    expect(roleOf(result, 'kitchen').amount).toBe(1600);
+    expect(roleOf(result, 'bartender').amount).toBe(3200);
+    expect(memberAmounts(roleOf(result, 'bartender'))).toEqual({ joseph: 1600, aaron: 1600 });
+    expect(roleOf(result, 'host').amount).toBe(3200);
+    expect(result.kept).toBe(22000);
+    expect(result.poolPercentOfTips).toBeCloseTo((8000 / 30000) * 100, 10);
+    expect(warnings).toEqual([]);
+  });
+
+  it('bartender flow with a netSales pool: keptSplit and keptChange follow the same rules', () => {
+    /*
+     * Bartender profile, pool 3% of net 90543 = 2716.29 -> 2716c -> floor 2700 (adj 16)
+     * KTO 2% x 12000 = 240 ($2.40); remainder 2716.29 - 240 = 2476.29 -> barback 3/4 = 1857.2175,
+     *   host 619.0725 (missing, retained)
+     * whole dollars: weights [2.40, 18.572175, 6.190725] scaled to $27 -> 2.386 / 18.460 / 6.154
+     *   floors 26, $1 left -> barback (.460) -> $2 / $19 / $6
+     * pool paid = 200 + 1900 = 2100; retained 600; kept = 19255 - 2100 = 17155
+     * keptSplit floorToDollar(17155) = 17100 -> $171 / 2 = 85.5 -> tie -> Joseph 8600 / Aaron 8500
+     * keptChange 55
+     */
+    const p: TipOutProfile = {
+      ...BARTENDER_DEFAULT_PROFILE,
+      id: 'bar-net',
+      totalTipOutPercentOfTips: 3,
+      poolBasis: 'netSales',
+    };
+    const { result, warnings } = calculateShift(golden2Input({ profileId: 'bar-net' }), p);
+    expect(result.roundingAdjustment).toBe(16);
+    expect(roleOf(result, 'kitchen').amount).toBe(200);
+    expect(roleOf(result, 'barback').amount).toBe(1900);
+    expect(roleOf(result, 'host')).toMatchObject({ amount: 600, missing: true });
+    expect(result.pool).toBe(2100);
+    expect(result.retained).toBe(600);
+    expect(result.kept).toBe(17155);
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 8600, aaron: 8500 });
+    expect(result.keptChange).toBe(55);
+    expect(warnings).toEqual([]);
+  });
+});
+
+describe('equal clock-in and clock-out (owner Q5 / review D2)', () => {
+  it('blocks calculateShift with INVALID_CLOCK for a tip-out role member', () => {
+    const team = [
+      ...withoutRole(golden1Team(), 'host'),
+      member('Hannah', 'host', {
+        id: 'hannah',
+        clockIn: '2026-11-17T20:00:00Z',
+        clockOut: '2026-11-17T20:00:00Z',
+      }),
+    ];
+    expectValidationError(
+      () => calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE),
+      'INVALID_CLOCK',
+    );
+  });
+
+  it('blocks calculateShift with INVALID_CLOCK for a bartender sharing kept tips', () => {
+    const team = [
+      member('Joseph', 'bartender', {
+        id: 'joseph',
+        clockIn: '2026-11-17T18:00:00Z',
+        clockOut: '2026-11-17T18:00:00Z',
+      }),
+      member('Aaron', 'bartender', {
+        id: 'aaron',
+        clockIn: '2026-11-17T18:00:00Z',
+        clockOut: '2026-11-18T02:00:00Z',
+      }),
+      member('David', 'barback', { id: 'david' }),
+      member('Allen', 'barback', { id: 'allen' }),
+    ];
+    expectValidationError(
+      () => calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE),
+      'INVALID_CLOCK',
+    );
+  });
+
+  it('blocks even when rounding is off and the role would otherwise split equally', () => {
+    const team = [
+      ...withoutRole(golden1Team(), 'host'),
+      member('Hannah', 'host', { id: 'hannah', clockIn: '20:00', clockOut: '20:00' }),
+    ];
+    expectValidationError(
+      () => calculateShift(golden1Input({ team, roundToDollar: false }), SERVER_DEFAULT_PROFILE),
+      'INVALID_CLOCK',
+    );
+  });
+
+  it('a one-minute shift is still valid (only exactly equal times are rejected)', () => {
+    /*
+     * Joseph 18:00 -> 18:01 = 1/60 h; Aaron 18:00 -> 02:00 = 8 h
+     * $149 x (1/60) / (8 + 1/60) = 0.31 -> 0; Aaron 148.69 -> 148; $1 left -> Aaron (.69)
+     *   -> 0 / 14900, keptChange 55
+     */
+    const team = [
+      member('Joseph', 'bartender', {
+        id: 'joseph',
+        clockIn: '2026-11-17T18:00:00Z',
+        clockOut: '2026-11-17T18:01:00Z',
+      }),
+      member('Aaron', 'bartender', {
+        id: 'aaron',
+        clockIn: '2026-11-17T18:00:00Z',
+        clockOut: '2026-11-18T02:00:00Z',
+      }),
+      member('David', 'barback', { id: 'david' }),
+      member('Allen', 'barback', { id: 'allen' }),
+    ];
+    const { result } = calculateShift(golden2Input({ team }), BARTENDER_DEFAULT_PROFILE);
+    expect(keptSplitAmounts(result)).toEqual({ joseph: 0, aaron: 14900 });
+    expect(result.keptChange).toBe(55);
   });
 });
 
