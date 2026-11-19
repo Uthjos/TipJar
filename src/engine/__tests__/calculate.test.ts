@@ -364,7 +364,9 @@ describe('hours: partial hours block calculation (§5.1 step 4)', () => {
     );
   });
 
-  it('throws PARTIAL_HOURS when a half-entered clock pair leaves a member without hours', () => {
+  // Review decision D1 (docs/review-log.md): a half-entered clock pair blocks calculation
+  // with INVALID_CLOCK (it is a clock-entry error), whether or not others in the role have hours.
+  it('throws INVALID_CLOCK when a half-entered clock pair leaves a member without hours', () => {
     const team = [
       ...withoutRole(golden1Team(), 'barback'),
       member('David', 'barback', { id: 'david', hours: 5 }),
@@ -372,7 +374,19 @@ describe('hours: partial hours block calculation (§5.1 step 4)', () => {
     ];
     expectValidationError(
       () => calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE),
-      'PARTIAL_HOURS',
+      'INVALID_CLOCK',
+    );
+  });
+
+  it('throws INVALID_CLOCK for a half-entered clock pair even when nobody else has hours', () => {
+    const team = [
+      ...withoutRole(golden1Team(), 'barback'),
+      member('David', 'barback', { id: 'david' }),
+      member('Allen', 'barback', { id: 'allen', clockIn: '2026-11-17T18:00:00Z' }),
+    ];
+    expectValidationError(
+      () => calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE),
+      'INVALID_CLOCK',
     );
   });
 

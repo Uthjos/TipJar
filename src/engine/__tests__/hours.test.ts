@@ -1,4 +1,5 @@
 import { memberHours } from '../hours';
+import { expectValidationError } from '../../test-support/builders';
 import type { TeamMember } from '../types';
 
 // All clock times use an explicit UTC offset ("Z") so results don't depend on the
@@ -69,8 +70,17 @@ describe('memberHours', () => {
     expect(memberHours(m({}))).toBeUndefined();
   });
 
-  it('returns undefined when only clockIn or only clockOut is given', () => {
-    expect(memberHours(m({ clockIn: '2026-11-17T20:00:00Z' }))).toBeUndefined();
-    expect(memberHours(m({ clockOut: '2026-11-17T20:00:00Z' }))).toBeUndefined();
+  // Review decision D1 (docs/review-log.md): a half-entered clock pair is an input error,
+  // not "no hours". Treating it as undefined would silently fall back to an equal split when
+  // nobody else in the role has hours, ignoring what the user typed.
+  it('throws INVALID_CLOCK when only clockIn or only clockOut is given', () => {
+    expectValidationError(
+      () => memberHours(m({ clockIn: '2026-11-17T20:00:00Z' })),
+      'INVALID_CLOCK',
+    );
+    expectValidationError(
+      () => memberHours(m({ clockOut: '2026-11-17T20:00:00Z' })),
+      'INVALID_CLOCK',
+    );
   });
 });
