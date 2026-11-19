@@ -116,6 +116,7 @@ export default function ResultsScreen() {
   const draft = useShiftStore((s) => s.draft);
   const profile = useShiftStore(selectProfile);
   const { setMissingRoleHandling, saveShift, resetDraft } = useShiftStore.getState();
+  const [saving, setSaving] = useState(false);
 
   const computed = useMemo(() => {
     const input = buildShiftInput(draft, profile);
@@ -158,10 +159,18 @@ export default function ResultsScreen() {
     await Clipboard.setStringAsync(shareText);
     Alert.alert('Copied', 'Summary copied — paste it in your group chat.');
   };
-  const onSave = () => {
-    saveShift(input, result);
+  const onSave = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      // Pass the team as typed so placeholder names ("Barback 2") aren't remembered.
+      await saveShift(input, result, draft.team);
+    } catch (e) {
+      setSaving(false);
+      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
+      return;
+    }
     resetDraft();
-    Alert.alert('Shift saved', 'Saved for this session. (Saving to the device comes next.)');
     router.dismissAll();
   };
 
@@ -169,7 +178,7 @@ export default function ResultsScreen() {
     <Screen
       footer={
         <>
-          <Button label="Save shift" onPress={onSave} />
+          <Button label={saving ? 'Saving…' : 'Save shift'} onPress={onSave} disabled={saving} />
           <View style={{ flexDirection: 'row', gap: spacing.sm }}>
             <Button variant="secondary" label="Share" onPress={onShare} style={{ flex: 1 }} />
             <Button variant="secondary" label="Copy" onPress={onCopy} style={{ flex: 1 }} />

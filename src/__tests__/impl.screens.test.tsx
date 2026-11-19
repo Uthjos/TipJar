@@ -1,7 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { Alert } from 'react-native';
 
-import { useShiftStore } from '@/store/shiftStore';
+import { calculateShift } from '@/engine/calculate';
+import { buildShiftInput, selectProfile, useShiftStore } from '@/store/shiftStore';
 
+import HistoryScreen from '../../app/(tabs)/history';
 import NewShiftScreen from '../../app/(tabs)/index';
 import ResultsScreen from '../../app/shift/results';
 import TeamScreen from '../../app/shift/team';
@@ -72,5 +75,36 @@ describe('manual flow screens', () => {
     ).toBeTruthy();
     expect(screen.getAllByText('$75.00')).toHaveLength(2);
     expect(screen.getByLabelText('Your share $75.55')).toBeTruthy();
+  });
+
+  it('Who worked offers saved coworkers as quick-add chips', async () => {
+    useShiftStore.setState({
+      coworkers: [
+        { id: 'c1', name: 'Zoe', usualRole: 'host', lastWorked: '2026-11-10' },
+        { id: 'c2', name: 'Joseph', usualRole: 'bartender', lastWorked: '2026-11-09' },
+      ],
+    });
+    await render(<TeamScreen />);
+    await fireEvent.press(screen.getByLabelText('Add Zoe as host'));
+    expect(useShiftStore.getState().draft.team).toEqual([
+      expect.objectContaining({ name: 'Zoe', role: 'host' }),
+    ]);
+    // Zoe is now on the team, so her chip is hidden.
+    expect(screen.queryByLabelText('Add Zoe as host')).toBeNull();
+    expect(screen.getByLabelText('Add Joseph as bartender')).toBeTruthy();
+  });
+
+  it('History lists saved shifts and confirms before deleting', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    seedGolden();
+    const state = useShiftStore.getState();
+    const profile = selectProfile(state);
+    const input = buildShiftInput(state.draft, profile);
+    await state.saveShift(input, calculateShift(input, profile).result);
+    await render(<HistoryScreen />);
+    await fireEvent.press(screen.getByLabelText('Delete'));
+    expect(alert).toHaveBeenCalledWith('Delete this shift?', expect.any(String), expect.any(Array));
+    expect(useShiftStore.getState().savedShifts).toHaveLength(1);
+    alert.mockRestore();
   });
 });

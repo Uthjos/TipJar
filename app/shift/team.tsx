@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Body, Button, Card, Input, Muted, Screen, Segmented, Title } from '@/components/ui';
 import { roleLabel, roleSingular } from '@/engine/profiles';
 import type { RoleId, TeamMember } from '@/engine/types';
-import { selectProfile, teamRolesFor, useShiftStore } from '@/store/shiftStore';
+import { quickAddCoworkers, selectProfile, teamRolesFor, useShiftStore } from '@/store/shiftStore';
 import { font, MIN_TAP, radius, spacing, useColors } from '@/theme';
 
 function singular(role: RoleId) {
@@ -135,6 +135,9 @@ export default function TeamScreen() {
   const profile = useShiftStore(selectProfile);
   const { addMember } = useShiftStore.getState();
   const roles = teamRolesFor(profile);
+  const coworkers = useShiftStore((s) => s.coworkers);
+  const quickAdd = quickAddCoworkers(coworkers, draft.team, roles);
+  const c = useColors();
 
   return (
     <Screen footer={<Button label="See tip-out" onPress={() => router.push('/shift/results')} />}>
@@ -142,6 +145,33 @@ export default function TeamScreen() {
         Add everyone who worked. Leave hours blank to split evenly — use 24h times like 17:00 for
         clock in/out (overnight shifts are fine).
       </Muted>
+      {quickAdd.length > 0 ? (
+        <Card>
+          <Title>Quick add</Title>
+          <View style={styles.chips}>
+            {quickAdd.map((cw) => (
+              <Pressable
+                key={cw.id}
+                accessibilityRole="button"
+                accessibilityLabel={`Add ${cw.name} as ${singular(cw.usualRole)}`}
+                onPress={() => addMember(cw.usualRole, cw.name)}
+                style={({ pressed }) => [
+                  styles.chip,
+                  { backgroundColor: c.surfaceAlt, borderColor: c.border },
+                  pressed && { opacity: 0.7 },
+                ]}
+              >
+                <Text style={{ color: c.text, fontSize: font.label, fontWeight: '600' }}>
+                  + {cw.name}
+                </Text>
+                <Text style={{ color: c.textMuted, fontSize: font.small }}>
+                  {roleSingular(cw.usualRole)}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </Card>
+      ) : null}
       {roles.map((role) => {
         const members = draft.team.filter((m) => m.role === role);
         const isBarShare = profile.appliesTo === 'bartender' && role === 'bartender';
@@ -186,4 +216,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   linkBtn: { minHeight: 44, justifyContent: 'center' },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  chip: {
+    minHeight: 48,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    justifyContent: 'center',
+  },
 });

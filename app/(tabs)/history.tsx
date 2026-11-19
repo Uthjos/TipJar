@@ -1,22 +1,44 @@
-import { View } from 'react-native';
+import { Alert, Platform, View } from 'react-native';
 
-import { Body, Card, Muted, Screen, Title } from '@/components/ui';
+import { Body, Button, Card, Muted, Screen, Title } from '@/components/ui';
 import { formatCents } from '@/engine/money';
 import { userEarnings } from '@/lib/earnings';
 import { formatShiftDate } from '@/lib/format';
-import { useShiftStore } from '@/store/shiftStore';
+import { type SavedShift, useShiftStore } from '@/store/shiftStore';
 import { spacing } from '@/theme';
 
-/** Stub: week/month/year breakdown and charts arrive with persistence + history milestones. */
+function confirmDelete(shift: SavedShift, onConfirm: () => void) {
+  const title = 'Delete this shift?';
+  const message = `${formatShiftDate(shift.input.date)} will be removed from this device. This can't be undone.`;
+  if (Platform.OS === 'web') {
+    // Alert buttons aren't supported on web.
+    if (globalThis.confirm?.(`${title}\n\n${message}`)) onConfirm();
+    return;
+  }
+  Alert.alert(title, message, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Delete', style: 'destructive', onPress: onConfirm },
+  ]);
+}
+
+/** Saved shifts from the on-device database. Week/month/year breakdowns arrive in milestone 7. */
 export default function HistoryScreen() {
   const saved = useShiftStore((s) => s.savedShifts);
+  const deleteShift = useShiftStore((s) => s.deleteShift);
+
+  const onDelete = (shift: SavedShift) =>
+    confirmDelete(shift, () => {
+      deleteShift(shift.id).catch((e: unknown) =>
+        Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.'),
+      );
+    });
+
   return (
     <Screen>
       <Card>
         <Title>History</Title>
         <Muted>
-          Week / month / year breakdowns and charts are coming soon. Shifts saved in this session
-          are listed below (they are not stored on the device yet).
+          Your saved shifts, newest first. Week / month / year breakdowns are coming soon.
         </Muted>
       </Card>
       {saved.length === 0 ? (
@@ -33,6 +55,13 @@ export default function HistoryScreen() {
                   share + change. */}
               <Muted>You earned {formatCents(userEarnings(s.input, s.result))}</Muted>
             </View>
+            <Button
+              compact
+              variant="danger"
+              label="Delete"
+              accessibilityHint={`Deletes the shift from ${formatShiftDate(s.input.date)}`}
+              onPress={() => onDelete(s)}
+            />
           </Card>
         ))
       )}

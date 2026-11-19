@@ -86,6 +86,7 @@ setSetting<T>(db, key: string, value: T): Promise<void>
 ```
 
 Rules:
+
 - **Snapshot:** `getShift` returns exactly the `input` and `result` that were saved (deep-equal),
   including optional fields (`keptSplit`, `heldBack`, `keptHeldBack`, `isUser`, hours/clock
   times). Editing or deleting a profile later never changes a saved shift.
