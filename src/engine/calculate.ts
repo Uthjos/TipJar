@@ -65,6 +65,16 @@ function validateMoney(label: string, value: number): Cents {
 }
 
 function validateProfile(profile: TipOutProfile): void {
+  const seen = new Set<RoleId>();
+  for (const rule of profile.rules) {
+    if (seen.has(rule.role)) {
+      throw new EngineValidationError(
+        'DUPLICATE_ROLE',
+        `The profile lists ${rule.role} more than once. Each role can only have one rule.`,
+      );
+    }
+    seen.add(rule.role);
+  }
   const p = profile.totalTipOutPercentOfTips;
   if (!Number.isFinite(p) || p < 0 || p > 100) {
     throw new EngineValidationError(
@@ -200,6 +210,13 @@ export function calculateShift(
     });
   }
 
+  if (profile.appliesTo !== input.userRole) {
+    warnings.push({
+      code: 'PROFILE_ROLE_MISMATCH',
+      message: `The "${profile.name}" profile is meant for a ${profile.appliesTo}, but this shift is for a ${input.userRole}.`,
+    });
+  }
+
   const rounding = input.roundToDollar;
   const roundMembers = rounding && !!options.roundMemberShares;
   const team = input.team ?? [];
@@ -211,6 +228,23 @@ export function calculateShift(
     else membersByRole.set(m.role, [m]);
   }
   const membersOf = (role: RoleId): TeamMember[] => membersByRole.get(role) ?? [];
+
+  // Team members whose role gets nothing from this profile (and who don't share the bar's
+  // kept tips) are left out of the calculation; tell the user rather than dropping them silently.
+  const ruleRoles = new Set<RoleId>(profile.rules.map((r) => r.role));
+  const unused = team.filter(
+    (m) =>
+      !ruleRoles.has(m.role) &&
+      !(input.userRole === 'bartender' && m.role === 'bartender') &&
+      !NEVER_MISSING_ROLES.has(m.role),
+  );
+  if (unused.length > 0) {
+    const one = unused.length === 1;
+    warnings.push({
+      code: 'UNUSED_TEAM_MEMBERS',
+      message: `${unused.map((m) => m.name || 'Someone').join(', ')} ${one ? 'is' : 'are'} not in a role this profile tips out, so ${one ? 'gets' : 'get'} nothing.`,
+    });
+  }
 
   // Resolve hours for every role we will split (validates PARTIAL_HOURS / INVALID_CLOCK up front).
   const groupHours = new Map<RoleId, { weights: number[]; hours: number[] }>();
@@ -225,16 +259,42 @@ export function calculateShift(
   const poolExact = (totalTips * profile.totalTipOutPercentOfTips) / 100; // fractional cents
   const poolCents = Math.min(totalTips, Math.round(poolExact));
 
-  // --- 2. carve-outs (exact) ------------------------------------------------
+  // --- missing roles --------------------------------------------------------
+  // A role is missing when nobody in it is on shift. Kitchen never needs named members. This
+  // applies to fixed (percentOfBasis) roles too, so a custom carve-out like "busser 1% of net
+  // sales" is never paid out to nobody (review D4).
   const amounts = { totalTips, netSales, foodSales };
   const carveIdx: number[] = [];
   const shareIdx: number[] = [];
   profile.rules.forEach((r, i) => (r.type === 'percentOfBasis' ? carveIdx : shareIdx).push(i));
+  const isMissing = (role: RoleId) =>
+    !NEVER_MISSING_ROLES.has(role) && membersOf(role).length === 0;
+  const carveRules = carveIdx.map(
+    (i) => profile.rules[i] as Extract<TipOutRule, { type: 'percentOfBasis' }>,
+  );
+  const shareRules = shareIdx.map(
+    (i) => profile.rules[i] as Extract<TipOutRule, { type: 'shareOfRemainder' }>,
+  );
+  const carveMissing = carveRules.map((r) => isMissing(r.role));
+  const missingFlags = shareRules.map((r) => isMissing(r.role));
+  const anyPresent = missingFlags.some((m) => !m);
+  const anyMissing = missingFlags.some((m) => m) || carveMissing.some((m) => m);
+  // 'redistribute' with no staffed share role to receive it falls back to retaining (warned).
+  const redistribute = input.missingRoleHandling === 'redistribute' && anyPresent;
+  if (input.missingRoleHandling === 'redistribute' && anyMissing && !anyPresent) {
+    warnings.push({
+      code: 'NO_REDISTRIBUTION_RECIPIENTS',
+      message:
+        'Nobody is on shift in the roles that could take the missing share, so it stays with you.',
+    });
+  }
 
-  let carveExact = carveIdx.map((i) => {
-    const rule = profile.rules[i] as Extract<TipOutRule, { type: 'percentOfBasis' }>;
-    return (basisValue(rule, amounts) * rule.percent) / 100;
-  });
+  // --- 2. carve-outs (exact) ------------------------------------------------
+  // A missing carve-out that is being redistributed carves nothing: its money stays in the
+  // remainder and is split over the staffed share roles by weight.
+  let carveExact = carveRules.map((rule, j) =>
+    redistribute && carveMissing[j] ? 0 : (basisValue(rule, amounts) * rule.percent) / 100,
+  );
   const carveExactSum = carveExact.reduce((a, b) => a + b, 0);
   const carveCapped = carveExactSum > poolExact;
   if (carveCapped) {
@@ -247,17 +307,7 @@ export function calculateShift(
       carveExactSum > 0 ? carveExact.map((c) => (c * poolExact) / carveExactSum) : carveExact;
   }
 
-  // --- 3. remainder shares (exact) and missing roles ------------------------
-  const isMissing = (role: RoleId) =>
-    !NEVER_MISSING_ROLES.has(role) && membersOf(role).length === 0;
-  const shareRules = shareIdx.map(
-    (i) => profile.rules[i] as Extract<TipOutRule, { type: 'shareOfRemainder' }>,
-  );
-  const missingFlags = shareRules.map((r) => isMissing(r.role));
-  const anyPresent = missingFlags.some((m) => !m);
-  // 'redistribute' with nobody present falls back to retaining.
-  const redistribute = input.missingRoleHandling === 'redistribute' && anyPresent;
-
+  // --- 3. remainder shares (exact) ------------------------------------------
   // Which share rules receive a slice of the remainder.
   const shareParticipates = missingFlags.map((missing) => !(redistribute && missing));
   const shareWeights = shareRules.map((r, k) => (shareParticipates[k] ? r.weight : 0));
@@ -306,8 +356,9 @@ export function calculateShift(
     let amount: Cents;
     let missing = false;
     if (rule.type === 'percentOfBasis') {
-      // Fixed carve-outs (e.g. kitchen) are always paid; they are never "missing".
-      amount = carveAmounts[carveK++]!;
+      const j = carveK++;
+      amount = carveAmounts[j]!;
+      missing = carveMissing[j]!;
     } else {
       const k = shareK++;
       amount = shareAmounts[k]!;

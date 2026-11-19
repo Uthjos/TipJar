@@ -59,11 +59,13 @@ describe('memberHours', () => {
     ).toBeCloseTo(2.75, 10);
   });
 
-  it('treats clockOut === clockIn as a full 24h shift (contract: clockOut <= clockIn => next day)', () => {
-    // ASSUMPTION (docs/test-findings.md #6): contract says "<=" so equal times => 24h.
-    expect(
-      memberHours(m({ clockIn: '2026-11-17T20:00:00Z', clockOut: '2026-11-17T20:00:00Z' })),
-    ).toBe(24);
+  // Review decision D2 (docs/review-log.md, finding #6a): equal times are almost certainly a
+  // typo; weighting someone at 24h would silently skew the split, so block instead.
+  it('rejects clockOut === clockIn with INVALID_CLOCK', () => {
+    expectValidationError(
+      () => memberHours(m({ clockIn: '2026-11-17T20:00:00Z', clockOut: '2026-11-17T20:00:00Z' })),
+      'INVALID_CLOCK',
+    );
   });
 
   it('returns undefined when neither hours nor a full clock pair is given', () => {

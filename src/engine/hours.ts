@@ -27,12 +27,12 @@ function parseClock(value: string): { kind: 'time' | 'datetime'; minutes: number
 /**
  * Hours worked by a team member.
  * - Uses `hours` when set.
- * - Otherwise `clockOut - clockIn`; if clockOut <= clockIn the shift is treated as ending
- *   the next day (+24h), so overnight shifts work.
+ * - Otherwise `clockOut - clockIn`; if clockOut < clockIn the shift is treated as ending
+ *   the next day (+24h), so overnight shifts work. Equal times are rejected.
  * - undefined if neither is given.
  *
  * @throws EngineValidationError('INVALID_CLOCK') for negative/non-finite hours, only one of
- *   clockIn/clockOut, or unparseable clock values.
+ *   clockIn/clockOut, clockIn === clockOut, or unparseable clock values.
  */
 export function memberHours(m: TeamMember): number | undefined {
   if (m.hours !== undefined && m.hours !== null) {
@@ -65,6 +65,13 @@ export function memberHours(m: TeamMember): number | undefined {
   }
 
   let minutes = cout.minutes - cin.minutes;
-  if (minutes <= 0) minutes += MINUTES_PER_DAY; // next-day clock-out
+  if (minutes === 0) {
+    // Same clock-in and clock-out is almost certainly a typo, not a 24h shift (review D2).
+    throw new EngineValidationError(
+      'INVALID_CLOCK',
+      `${m.name || 'A team member'} has the same clock-in and clock-out time.`,
+    );
+  }
+  if (minutes < 0) minutes += MINUTES_PER_DAY; // next-day clock-out
   return (minutes * 60_000) / MS_PER_HOUR;
 }

@@ -63,13 +63,19 @@ export interface TipOutProfile {
 export interface MemberResult {
   memberId: string;
   name: string;
+  /** Hours used for the split; 0 when nobody in the role entered hours (equal split). */
   hours: number;
   amount: Cents;
   percentOfTips: number;
 }
 
+/**
+ * One entry per profile rule, in profile rule order (missing roles included).
+ * Percentages are 0-100 and are 0 when the denominator (total tips / net sales) is 0.
+ */
 export interface RoleResult {
   role: RoleId;
+  /** Paid amount; for a missing role: the retained share ('retain') or 0 ('redistribute'). */
   amount: Cents;
   percentOfTips: number;
   percentOfNetSales: number;
@@ -88,6 +94,7 @@ export interface KeptSplitEntry {
 export interface ShiftResult {
   /** Total actually paid out to roles (excludes any retained share). */
   pool: Cents;
+  /** Paid `pool` as % of total tips (0 when total tips is 0). */
   poolPercentOfTips: number;
   poolPercentOfNetSales: number;
   /** totalTips - pool (what the user / the bar keeps; includes retained + roundingAdjustment). */
