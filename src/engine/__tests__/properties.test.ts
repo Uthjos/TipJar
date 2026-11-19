@@ -1,0 +1,401 @@
+/**
+ * Property-based tests (fast-check) for the calc engine invariants in CLAUDE.md §5.
+ * Runs are seeded so the suite is deterministic; bump NUM_RUNS locally to fuzz harder.
+ */
+import fc from 'fast-check';
+import { calculateShift } from '../calculate';
+import { splitLargestRemainder } from '../money';
+import { BARTENDER_DEFAULT_PROFILE, SERVER_DEFAULT_PROFILE } from '../profiles';
+import type { ShiftInput, ShiftResult, TeamMember, TipOutProfile, TipOutRule } from '../types';
+import { at, sum } from '../../test-support/builders';
+
+const SEED = 20261118;
+const NUM_RUNS = 400;
+const PARAMS = { seed: SEED, numRuns: NUM_RUNS };
+
+const SHARE_ROLE_POOL = ['barback', 'host', 'busser', 'bartender'] as const;
+type HoursMode = 'none' | 'hours' | 'clock';
+
+interface Case {
+  input: ShiftInput;
+  profile: TipOutProfile;
+  roundMemberShares: boolean;
+}
+
+const pct = (max: number) =>
+  fc.oneof(fc.integer({ min: 0, max }), fc.double({ min: 0, max, noNaN: true }));
+
+const basisArb = fc.constantFrom('foodSales', 'netSales', 'totalTips') as fc.Arbitrary<
+  'foodSales' | 'netSales' | 'totalTips'
+>;
+
+const rawCaseArb = fc.record({
+  userRole: fc.constantFrom('server', 'bartender') as fc.Arbitrary<'server' | 'bartender'>,
+  useDefaultProfile: fc.boolean(),
+  totalTips: fc.integer({ min: 0, max: 500_000 }),
+  netSales: fc.integer({ min: 0, max: 2_000_000 }),
+  foodSales: fc.integer({ min: 0, max: 2_000_000 }),
+  poolPercent: pct(100),
+  kitchen: fc.option(fc.record({ basis: basisArb, percent: pct(10) }), { nil: undefined }),
+  // a non-kitchen carve-out role ("expo") that always has members on shift
+  expo: fc.option(fc.record({ basis: basisArb, percent: pct(10) }), { nil: undefined }),
+  shareRoles: fc.shuffledSubarray([...SHARE_ROLE_POOL], { minLength: 1 }),
+  weights: fc.array(
+    fc.oneof(fc.integer({ min: 1, max: 10 }), fc.double({ min: 0.5, max: 10, noNaN: true })),
+    { minLength: 4, maxLength: 4 },
+  ),
+  counts: fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 4, maxLength: 4 }),
+  expoCount: fc.integer({ min: 1, max: 3 }),
+  bartenderCount: fc.integer({ min: 1, max: 4 }),
+  hoursModes: fc.array(fc.constantFrom<HoursMode>('none', 'hours', 'clock'), {
+    minLength: 6,
+    maxLength: 6,
+  }),
+  quarterHours: fc.array(fc.integer({ min: 1, max: 56 }), { minLength: 24, maxLength: 24 }),
+  clockStarts: fc.array(fc.integer({ min: 0, max: 1439 }), { minLength: 24, maxLength: 24 }),
+  missingRoleHandling: fc.constantFrom('redistribute', 'retain') as fc.Arbitrary<
+    'redistribute' | 'retain'
+  >,
+  roundToDollar: fc.boolean(),
+  roundMemberShares: fc.boolean(),
+});
+
+const BASE_MS = Date.UTC(2026, 10, 17, 0, 0, 0);
+
+type RawCase = typeof rawCaseArb extends fc.Arbitrary<infer T> ? T : never;
+
+function buildCase(r: RawCase): Case {
+  let slot = 0;
+  const nextSlot = () => slot++ % 24;
+
+  const makeMembers = (role: string, count: number, mode: HoursMode): TeamMember[] =>
+    Array.from({ length: count }, (_, i) => {
+      const s = nextSlot();
+      const m: TeamMember = { id: `${role}-${i}`, name: `${role} ${i}`, role };
+      if (mode === 'hours') m.hours = at(r.quarterHours, s) / 4;
+      if (mode === 'clock') {
+        const start = BASE_MS + at(r.clockStarts, s) * 60_000;
+        m.clockIn = new Date(start).toISOString();
+        m.clockOut = new Date(start + at(r.quarterHours, s) * 15 * 60_000).toISOString();
+      }
+      return m;
+    });
+
+  let profile: TipOutProfile;
+  if (r.useDefaultProfile) {
+    profile = r.userRole === 'server' ? SERVER_DEFAULT_PROFILE : BARTENDER_DEFAULT_PROFILE;
+  } else {
+    let shareRoles: string[] = r.shareRoles;
+    // In the bartender flow, bartenders share the kept tips; they are not a tip-out role.
+    if (r.userRole === 'bartender') shareRoles = shareRoles.filter((x) => x !== 'bartender');
+    if (shareRoles.length === 0) shareRoles = ['barback'];
+    const rules: TipOutRule[] = [];
+    if (r.kitchen) rules.push({ role: 'kitchen', type: 'percentOfBasis', ...r.kitchen });
+    if (r.expo) rules.push({ role: 'expo', type: 'percentOfBasis', ...r.expo });
+    shareRoles.forEach((role, i) =>
+      rules.push({ role, type: 'shareOfRemainder', weight: at(r.weights, i) }),
+    );
+    profile = {
+      id: 'prop-custom',
+      name: 'Property custom',
+      appliesTo: r.userRole,
+      totalTipOutPercentOfTips: r.poolPercent,
+      rules,
+    };
+  }
+
+  const team: TeamMember[] = [];
+  if (r.userRole === 'bartender') {
+    team.push(...makeMembers('bartender', r.bartenderCount, at(r.hoursModes, 5)));
+  }
+  const shareRules = profile.rules.filter((x) => x.type === 'shareOfRemainder');
+  shareRules.forEach((rule, i) => {
+    // The first share role always has someone on shift so 'redistribute' always has a target
+    // (all share roles missing + redistribute is undefined by the spec; see findings).
+    const count = i === 0 ? Math.max(1, at(r.counts, i)) : at(r.counts, i);
+    team.push(...makeMembers(rule.role, count, at(r.hoursModes, i)));
+  });
+  if (profile.rules.some((x) => x.role === 'expo')) {
+    team.push(...makeMembers('expo', r.expoCount, at(r.hoursModes, 4)));
+  }
+
+  return {
+    profile,
+    roundMemberShares: r.roundMemberShares,
+    input: {
+      date: '2026-11-17',
+      userRole: r.userRole,
+      totalTips: r.totalTips,
+      netSales: r.netSales,
+      foodSales: r.foodSales,
+      team,
+      missingRoleHandling: r.missingRoleHandling,
+      profileId: profile.id,
+      roundToDollar: r.roundToDollar,
+    },
+  };
+}
+
+const caseArb = rawCaseArb.map(buildCase);
+
+const run = (c: Case, overrides: Partial<ShiftInput> = {}) =>
+  calculateShift({ ...c.input, ...overrides }, c.profile, {
+    roundMemberShares: c.roundMemberShares,
+  }).result;
+
+const exactPool = (c: Case) => (c.input.totalTips * c.profile.totalTipOutPercentOfTips) / 100;
+
+function allAmounts(res: ShiftResult): number[] {
+  return [
+    res.pool,
+    res.kept,
+    res.retained,
+    res.roundingAdjustment,
+    ...res.roles.map((r) => r.amount),
+    ...res.roles.flatMap((r) => r.members.map((m) => m.amount)),
+    ...(res.keptSplit ?? []).map((k) => k.amount),
+  ];
+}
+
+describe('calculateShift properties', () => {
+  it('kept + pool == totalTips', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c);
+        expect(res.kept + res.pool).toBe(c.input.totalTips);
+      }),
+      PARAMS,
+    );
+  });
+
+  it('sum(roles paid) + retained <= unrounded pool <= totalTips', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c);
+        const paid = sum(res.roles.filter((r) => !r.missing).map((r) => r.amount));
+        const unrounded = res.pool + res.retained + res.roundingAdjustment;
+        expect(paid).toBe(res.pool);
+        expect(paid + res.retained).toBeLessThanOrEqual(unrounded);
+        expect(unrounded).toBeLessThanOrEqual(c.input.totalTips);
+        // the unrounded cent pool is the exact percentage rounded to the nearest cent
+        expect(Math.abs(unrounded - exactPool(c))).toBeLessThanOrEqual(0.5 + 1e-6);
+      }),
+      PARAMS,
+    );
+  });
+
+  it('every amount is an integer number of cents >= 0', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        for (const a of allAmounts(run(c))) {
+          expect(Number.isInteger(a)).toBe(true);
+          expect(a).toBeGreaterThanOrEqual(0);
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('member amounts sum exactly to their role amount', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c);
+        for (const r of res.roles) {
+          if (r.members.length > 0) expect(sum(r.members.map((m) => m.amount))).toBe(r.amount);
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('keptSplit sums to kept (bartender flow) and is absent in the server flow', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c);
+        if (c.input.userRole === 'bartender') {
+          const bartenders = c.input.team.filter((m) => m.role === 'bartender');
+          expect(res.keptSplit).toBeDefined();
+          expect(res.keptSplit!.map((k) => k.memberId)).toEqual(bartenders.map((m) => m.id));
+          expect(sum(res.keptSplit!.map((k) => k.amount))).toBe(res.kept);
+        } else {
+          expect(res.keptSplit).toBeUndefined();
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('roles mirror the profile rules; retained == sum of missing role amounts', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c);
+        expect(res.roles.map((r) => r.role).sort()).toEqual(c.profile.rules.map((r) => r.role).sort());
+        const missing = res.roles.filter((r) => r.missing);
+        expect(sum(missing.map((r) => r.amount))).toBe(res.retained);
+        for (const r of missing) expect(r.members).toEqual([]);
+        if (c.input.missingRoleHandling === 'redistribute') expect(res.retained).toBe(0);
+        // kitchen is never missing
+        const kitchen = res.roles.find((r) => r.role === 'kitchen');
+        if (kitchen) expect(kitchen.missing).toBeFalsy();
+      }),
+      PARAMS,
+    );
+  });
+
+  it('roundingAdjustment is 0 when rounding is off, and in [0, 99] when on', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c);
+        if (!c.input.roundToDollar) expect(res.roundingAdjustment).toBe(0);
+        else {
+          expect(res.roundingAdjustment).toBeGreaterThanOrEqual(0);
+          expect(res.roundingAdjustment).toBeLessThan(100);
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('with rounding on, every role amount is a whole dollar (and members too with roundMemberShares)', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c, { roundToDollar: true });
+        expect((res.pool + res.retained) % 100).toBe(0);
+        for (const r of res.roles) {
+          expect(r.amount % 100).toBe(0);
+          if (c.roundMemberShares) for (const m of r.members) expect(m.amount % 100).toBe(0);
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('rounding never increases the total tipped out', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const on = run(c, { roundToDollar: true });
+        const off = run(c, { roundToDollar: false });
+        expect(on.pool + on.retained).toBeLessThanOrEqual(off.pool + off.retained);
+        expect(on.pool + on.retained + on.roundingAdjustment).toBe(off.pool + off.retained);
+      }),
+      PARAMS,
+    );
+  });
+
+  it("'redistribute' pays out exactly what 'retain' pays plus what it retains", () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const retain = run(c, { missingRoleHandling: 'retain' });
+        const redistribute = run(c, { missingRoleHandling: 'redistribute' });
+        expect(redistribute.pool).toBe(retain.pool + retain.retained);
+        expect(redistribute.retained).toBe(0);
+        expect(retain.kept).toBeGreaterThanOrEqual(redistribute.kept);
+      }),
+      PARAMS,
+    );
+  });
+
+  it('members with no hours entered get equal shares (within one cent / one dollar)', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c);
+        const tol = c.input.roundToDollar && c.roundMemberShares ? 100 : 1;
+        for (const r of res.roles) {
+          const ids = new Set(r.members.map((m) => m.memberId));
+          const anyHours = c.input.team.some(
+            (m) => ids.has(m.id) && (m.hours !== undefined || m.clockIn !== undefined),
+          );
+          if (anyHours || r.members.length < 2) continue;
+          const amounts = r.members.map((m) => m.amount);
+          expect(Math.max(...amounts) - Math.min(...amounts)).toBeLessThanOrEqual(tol);
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('percentages are finite and consistent with amounts', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        const res = run(c);
+        const tips = c.input.totalTips;
+        const net = c.input.netSales;
+        const pctOf = (a: number, b: number) => (b === 0 ? 0 : (a / b) * 100);
+        expect(Number.isFinite(res.poolPercentOfTips)).toBe(true);
+        expect(Number.isFinite(res.poolPercentOfNetSales)).toBe(true);
+        expect(res.poolPercentOfTips).toBeCloseTo(pctOf(res.pool, tips), 6);
+        expect(res.poolPercentOfNetSales).toBeCloseTo(pctOf(res.pool, net), 6);
+        for (const r of res.roles) {
+          expect(Number.isFinite(r.percentOfTips)).toBe(true);
+          expect(Number.isFinite(r.percentOfNetSales)).toBe(true);
+          expect(r.percentOfTips).toBeGreaterThanOrEqual(0);
+          expect(r.percentOfTips).toBeLessThanOrEqual(100 + 1e-9);
+          if (!r.missing) expect(r.percentOfTips).toBeCloseTo(pctOf(r.amount, tips), 6);
+          for (const m of r.members) {
+            expect(m.percentOfTips).toBeCloseTo(pctOf(m.amount, tips), 6);
+          }
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('is deterministic', () => {
+    fc.assert(
+      fc.property(caseArb, (c) => {
+        expect(run(c)).toEqual(run(c));
+      }),
+      { seed: SEED, numRuns: 100 },
+    );
+  });
+});
+
+describe('splitLargestRemainder properties', () => {
+  const weightsArb = fc
+    .array(
+      fc.oneof(fc.integer({ min: 0, max: 1000 }), fc.double({ min: 0, max: 1000, noNaN: true })),
+      { minLength: 1, maxLength: 12 },
+    )
+    .filter((ws) => ws.some((w) => w > 0));
+
+  it('parts are non-negative integers summing exactly to the total', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: 100_000_000 }), weightsArb, (total, weights) => {
+        const parts = splitLargestRemainder(total, weights);
+        expect(parts).toHaveLength(weights.length);
+        expect(sum(parts)).toBe(total);
+        for (const p of parts) {
+          expect(Number.isInteger(p)).toBe(true);
+          expect(p).toBeGreaterThanOrEqual(0);
+        }
+      }),
+      PARAMS,
+    );
+  });
+
+  it('each part is within 1 of its exact proportional share', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: 100_000_000 }), weightsArb, (total, weights) => {
+        const parts = splitLargestRemainder(total, weights);
+        const w = sum(weights);
+        parts.forEach((p, i) => {
+          const exact = (total * at(weights, i)) / w;
+          expect(Math.abs(p - exact)).toBeLessThan(1 + 1e-6);
+        });
+      }),
+      PARAMS,
+    );
+  });
+
+  it('zero-weight parts get 0', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: 100_000_000 }), weightsArb, (total, weights) => {
+        const parts = splitLargestRemainder(total, weights);
+        weights.forEach((wt, i) => {
+          if (wt === 0) expect(parts[i]).toBe(0);
+        });
+      }),
+      PARAMS,
+    );
+  });
+});
