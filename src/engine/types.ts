@@ -55,8 +55,10 @@ export interface TipOutProfile {
   /** "Server default", "Bartender default", user-created... */
   name: string;
   appliesTo: UserRole;
-  /** e.g. 30 -> 30% of total tips is the tip-out pool. */
+  /** e.g. 30 -> 30% of the pool basis is the tip-out pool (name kept for compatibility). */
   totalTipOutPercentOfTips: number;
+  /** What the pool % is taken of. Default 'totalTips' (owner Q4). Pool is capped at total tips. */
+  poolBasis?: Basis;
   rules: TipOutRule[];
 }
 
@@ -101,6 +103,11 @@ export interface ShiftResult {
   kept: Cents;
   /** Bartender flow: kept tips split among the bartenders on shift. */
   keptSplit?: KeptSplitEntry[];
+  /**
+   * Bartender flow with whole-dollar rounding: cents of `kept` not shared out
+   * (kept - sum(keptSplit)); stays with whoever closes out. 0 otherwise.
+   */
+  keptChange: Cents;
   /** Share of absent roles kept back (missingRoleHandling = 'retain'). */
   retained: Cents;
   roles: RoleResult[];

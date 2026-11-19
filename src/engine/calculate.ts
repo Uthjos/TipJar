@@ -22,9 +22,10 @@ export type { EngineValidationCode, EngineWarning, EngineWarningCode } from './e
 
 export interface CalculateOptions {
   /**
-   * When rounding to the dollar is on, also split each role's (whole-dollar) amount into
-   * whole-dollar member shares. Default false = members split to the cent (CLAUDE.md §5.4 / open
-   * question 1). Has no effect when `roundToDollar` is off.
+   * When rounding to the dollar is on, split each role's (whole-dollar) amount into whole-dollar
+   * member shares, and (bartender flow) share the bar's kept tips in whole dollars with the
+   * leftover cents reported as `keptChange` (CLAUDE.md §5.4 steps 4-5, owner Q1/Q2).
+   * Default true; pass false for cent-level splits. Has no effect when `roundToDollar` is off.
    */
   roundMemberShares?: boolean;
 }
@@ -181,7 +182,9 @@ function basisValue(
  * Semantics (see CLAUDE.md §5):
  * - `pool` = amount actually paid out to roles (excludes any retained share).
  * - `kept = totalTips - pool` (includes `retained` and `roundingAdjustment`).
- * - `roundingAdjustment` = unrounded pool (to the cent) - floored pool; 0 when rounding is off.
+ * - `roundingAdjustment` = unrounded (capped) pool (to the cent) - floored pool; 0 when rounding
+ *   is off.
+ * - `keptChange` = kept - sum(keptSplit) in the bartender flow with whole-dollar rounding; else 0.
  * - Missing roles ('retain'): listed with their computed amount, `missing: true`, no members;
  *   the amount is in `retained`, not `pool`.
  * - Missing roles ('redistribute'): listed with amount 0, `missing: true`; their share goes to
@@ -218,7 +221,7 @@ export function calculateShift(
   }
 
   const rounding = input.roundToDollar;
-  const roundMembers = rounding && !!options.roundMemberShares;
+  const roundMembers = rounding && options.roundMemberShares !== false;
   const team = input.team ?? [];
 
   const membersByRole = new Map<RoleId, TeamMember[]>();
@@ -256,7 +259,22 @@ export function calculateShift(
   }
 
   // --- 1. pool --------------------------------------------------------------
-  const poolExact = (totalTips * profile.totalTipOutPercentOfTips) / 100; // fractional cents
+  // pool = poolBasis x % (owner Q4); a sales-based pool can never exceed total tips.
+  const poolBasisValue =
+    profile.poolBasis === 'netSales'
+      ? netSales
+      : profile.poolBasis === 'foodSales'
+        ? foodSales
+        : totalTips;
+  let poolExact = (poolBasisValue * profile.totalTipOutPercentOfTips) / 100; // fractional cents
+  if (poolExact > totalTips) {
+    warnings.push({
+      code: 'POOL_EXCEEDS_TIPS',
+      message:
+        'The tip-out (a percentage of sales) came to more than your total tips, so it was capped at your total tips.',
+    });
+    poolExact = totalTips;
+  }
   const poolCents = Math.min(totalTips, Math.round(poolExact));
 
   // --- missing roles --------------------------------------------------------
@@ -399,12 +417,22 @@ export function calculateShift(
   const roundingAdjustment = rounding ? poolCents - flooredPool : 0;
 
   // --- 6. bartender flow: split what the bar keeps --------------------------
+  // With whole-dollar rounding the bar shares floorToDollar(kept) in whole dollars and the
+  // leftover cents are reported as keptChange (owner Q2); otherwise kept is split to the cent.
   let keptSplit: KeptSplitEntry[] | undefined;
+  let keptChange: Cents = 0;
   if (input.userRole === 'bartender') {
     const bartenders = membersOf('bartender');
     const group = groupHours.get('bartender');
     if (bartenders.length > 0 && group) {
-      const parts = safeSplit(kept, group.weights);
+      let parts: Cents[];
+      if (roundMembers) {
+        const shared = floorToDollar(kept);
+        keptChange = kept - shared;
+        parts = safeSplit(shared / 100, group.weights).map((d) => d * 100);
+      } else {
+        parts = safeSplit(kept, group.weights);
+      }
       keptSplit = bartenders.map((m, i) => ({
         memberId: m.id,
         name: m.name,
@@ -421,6 +449,7 @@ export function calculateShift(
     poolPercentOfTips: pct(pool, totalTips),
     poolPercentOfNetSales: pct(pool, netSales),
     kept,
+    keptChange,
     retained,
     roles,
     roundingAdjustment,

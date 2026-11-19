@@ -34,6 +34,7 @@ export class EngineValidationError extends Error {
  *   missing shares were retained instead.
  * - UNUSED_TEAM_MEMBERS: team members whose role the profile doesn't tip out (they get nothing).
  * - PROFILE_ROLE_MISMATCH: profile.appliesTo differs from input.userRole.
+ * - POOL_EXCEEDS_TIPS: a sales-based pool (profile.poolBasis) came to more than total tips; capped.
  * At most one warning per code is returned.
  */
 export type EngineWarningCode =
@@ -41,6 +42,7 @@ export type EngineWarningCode =
   | 'FOOD_EXCEEDS_NET'
   | 'NO_REDISTRIBUTION_RECIPIENTS'
   | 'UNUSED_TEAM_MEMBERS'
-  | 'PROFILE_ROLE_MISMATCH';
+  | 'PROFILE_ROLE_MISMATCH'
+  | 'POOL_EXCEEDS_TIPS';
 
 export type EngineWarning = { code: EngineWarningCode; message: string };
