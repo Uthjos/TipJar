@@ -1,5 +1,5 @@
 import type { ShiftResult } from '@/engine/types';
-import { basisLabel, buildShareText, hasChangeNote, keptShown } from '@/lib/format';
+import { basisLabel, buildShareText, hasChangeNote, keptShown, roundingParts } from '@/lib/format';
 import { golden2Input } from '@/test-support/builders';
 
 const base: ShiftResult = {
@@ -48,5 +48,34 @@ describe('basisLabel (#27)', () => {
     expect(basisLabel('totalTips')).toBe('total tips');
     expect(basisLabel('netSales')).toBe('net sales');
     expect(basisLabel('foodSales')).toBe('food sales');
+  });
+});
+
+describe('roundingParts (#37: floor trim and tie-held dollars shown separately)', () => {
+  it('Golden 1: $0.17 floor trim + $1 held from barbacks', () => {
+    const r: ShiftResult = {
+      ...base,
+      keptChange: 0,
+      roundingAdjustment: 117,
+      roles: [
+        {
+          role: 'barback',
+          amount: 3200,
+          percentOfTips: 0,
+          percentOfNetSales: 0,
+          members: [],
+          heldBack: 100,
+        },
+        { role: 'host', amount: 1100, percentOfTips: 0, percentOfNetSales: 0, members: [] },
+      ],
+    };
+    expect(roundingParts(r)).toEqual({ floorTrim: 17, heldFromRoles: 100 });
+    const text = buildShareText(golden2Input({ userRole: 'server' }), r);
+    expect(text).toContain('Rounded down to the dollar — $0.17 kept back');
+    expect(text).toContain('$1.00 kept back from tied whole-dollar shares');
+  });
+
+  it('no held dollars: all of roundingAdjustment is floor trim', () => {
+    expect(roundingParts({ ...base, roles: [] })).toEqual({ floorTrim: 77, heldFromRoles: 0 });
   });
 });

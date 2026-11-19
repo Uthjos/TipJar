@@ -16,6 +16,7 @@ import {
   hasChangeNote,
   heldBackNote,
   keptShown as keptShownFor,
+  roundingParts,
 } from '@/lib/format';
 import { userEarnings, userKeptEntry } from '@/lib/earnings';
 import { buildShiftInput, selectProfile, useShiftStore } from '@/store/shiftStore';
@@ -140,6 +141,8 @@ export default function ResultsScreen() {
   const shareText = buildShareText(input, result);
   // Bartender flow with whole-dollar rounding: the headline is the whole dollars actually shared.
   const keptShown = keptShownFor(result);
+  // Floor trim and tie-held dollars are shown as separate notes (review round 3, #37).
+  const { floorTrim, heldFromRoles } = roundingParts(result);
   // Bartender flow: the user's own share (their keptSplit amount + the change), owner Q9.
   const mine = userKeptEntry(input, result);
   const earnings = userEarnings(input, result);
@@ -234,9 +237,15 @@ export default function ResultsScreen() {
         {hasChangeNote(result) ? (
           <Muted>{changeNote(result.keptChange, result.keptHeldBack)}</Muted>
         ) : null}
-        {result.roundingAdjustment > 0 ? (
+        {floorTrim > 0 ? (
           <Muted>
-            Rounded down to the dollar — {formatCents(result.roundingAdjustment)} stays with{' '}
+            Rounded down to the dollar — {formatCents(floorTrim)} stays with{' '}
+            {isBartender ? 'the bar' : 'you'}.
+          </Muted>
+        ) : null}
+        {heldFromRoles > 0 ? (
+          <Muted>
+            {formatCents(heldFromRoles)} kept back from tied whole-dollar shares — stays with{' '}
             {isBartender ? 'the bar' : 'you'}.
           </Muted>
         ) : null}

@@ -48,6 +48,16 @@ export function changeNote(keptChange: number, keptHeldBack = 0): string {
   return `${formatCents(keptChange)} in change left over${held} — stays with whoever closes out.`;
 }
 
+/**
+ * Splits `roundingAdjustment` into its two parts (review round 3, #37): the cents trimmed when the
+ * pool was floored to the dollar, and the whole dollars held back from role splits by the tie
+ * rule (sum of `RoleResult.heldBack`).
+ */
+export function roundingParts(result: ShiftResult): { floorTrim: number; heldFromRoles: number } {
+  const heldFromRoles = result.roles.reduce((a, r) => a + (r.heldBack ?? 0), 0);
+  return { floorTrim: result.roundingAdjustment - heldFromRoles, heldFromRoles };
+}
+
 /** Explains dollars held back from a role by the odd-dollar tie rule, e.g. "$1.00 kept back — tied hours". */
 export function heldBackNote(heldBack: number): string {
   return `${formatCents(heldBack)} kept back — tied hours`;
@@ -85,10 +95,12 @@ export function buildShareText(input: ShiftInput, result: ShiftResult): string {
   } else {
     lines.push(`I keep: ${formatCents(result.kept)}`);
   }
-  if (result.roundingAdjustment > 0) {
-    lines.push(
-      `(Rounded down to the dollar — ${formatCents(result.roundingAdjustment)} kept back)`,
-    );
+  const { floorTrim, heldFromRoles } = roundingParts(result);
+  if (floorTrim > 0) {
+    lines.push(`(Rounded down to the dollar — ${formatCents(floorTrim)} kept back)`);
+  }
+  if (heldFromRoles > 0) {
+    lines.push(`(${formatCents(heldFromRoles)} kept back from tied whole-dollar shares)`);
   }
   return lines.join('\n');
 }
