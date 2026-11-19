@@ -99,7 +99,7 @@ interface ShiftResult {
   poolPercentOfNetSales: number;
   kept: Cents;                         // totalTips - pool (what the user / the bar keeps)
   keptSplit?: { memberId: string; name: string; hours: number; amount: Cents }[]; // bartender flow: kept tips split among bartenders
-  keptChange: Cents;                   // bartender flow + rounding: cents of `kept` not split (kept − sum(keptSplit)); else 0
+  keptChange: Cents;                   // bartender flow: kept − sum(keptSplit) (cents left by the whole-dollar split; 0 when split to the cent; all of kept if no bartenders listed); server flow: 0
   retained: Cents;                     // share of absent roles kept back (missingRoleHandling = 'retain')
   roles: RoleResult[];
   roundingAdjustment: Cents;           // how much rounding kept back (>= 0)
@@ -132,7 +132,7 @@ interface RoleResult {
 ## 5. Calculation engine (`src/engine/calculate.ts`)
 
 ### 5.1 Algorithm
-1. `pool = poolBasis × totalTipOutPercentOfTips / 100`, where `poolBasis` is total tips by default, or net / food sales if the profile says so (owner Q4). If a sales-based pool comes out above total tips, cap it at total tips and warn (`POOL_EXCEEDS_TIPS`).
+1. `pool = poolBasis × totalTipOutPercentOfTips / 100`, where `poolBasis` is total tips by default, or net / food sales if the profile says so (owner Q4). If a sales-based pool comes out above total tips, cap it at total tips and warn (`POOL_EXCEEDS_TIPS`); the warning compares the exact (unrounded) value, and the capped value is the pool for every later step (carve-out capping, §5.4 flooring and `roundingAdjustment`).
 2. For each `percentOfBasis` rule (e.g. KTO): `amount = basis × percent / 100`. Subtract from the pool.
    - If carve-outs exceed the pool, cap them to the pool and surface a warning to the user.
 3. `remainder = pool − sum(carve-outs)`. Split across `shareOfRemainder` rules proportional to `weight`.
@@ -164,7 +164,7 @@ When `roundToDollar` is on (this reproduces both examples in the source doc):
 2. Compute every carve-out (KTO) and role share **unrounded**, then allocate **whole dollars** across them with the largest-remainder method so they sum exactly to the floored pool. (Bartender example: KTO 2.40, barbacks 41.25, hosts 13.75 → $2 / $41 / $14 = $57.)
 3. The cents trimmed off the pool stay with the user / the bar and are reported as `roundingAdjustment`.
 4. Member amounts within a role are split from the rounded role amount **in whole dollars** (largest remainder, ties to the earlier member) — owner Q1. The engine option `roundMemberShares` now defaults to **true**; passing `false` restores cent-level member splits.
-5. **Bartender flow:** the bar's kept tips are also shared in whole dollars: `keptSplit` splits `floorToDollar(kept)` by hours, and the leftover cents are reported as `keptChange` (stays with whoever closes out) — owner Q2. `kept` itself is unchanged (`kept + pool = totalTips`), and `sum(keptSplit) + keptChange = kept`. The Results screen headline shows the whole-dollar amount (e.g. "Bar keeps $149") with a note for the change. With rounding off (or `roundMemberShares: false`), `keptSplit` is to the cent and `keptChange = 0`. Server flow: `keptChange = 0`.
+5. **Bartender flow:** the bar's kept tips are also shared in whole dollars: `keptSplit` splits `floorToDollar(kept)` by hours, and the leftover cents are reported as `keptChange` (stays with whoever closes out) — owner Q2. `kept` itself is unchanged (`kept + pool = totalTips`), and `sum(keptSplit) + keptChange = kept`. The Results screen headline shows the whole-dollar amount (e.g. "Bar keeps $149") with a note for the change. With rounding off (or `roundMemberShares: false`), `keptSplit` is to the cent and `keptChange = 0`. If no bartenders are listed, `keptSplit` is empty and `keptChange = kept` (the identity still holds; the Results screen prompts to add bartenders and shows the full `kept`). Server flow: `keptChange = 0`.
 - Property-test: for any input, `sum(roles) ≤ pool ≤ totalTips`.
 
 ### 5.5 Golden test (must pass exactly) — from the source doc
