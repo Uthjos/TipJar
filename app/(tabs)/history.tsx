@@ -2,7 +2,7 @@ import { View } from 'react-native';
 
 import { Body, Card, Muted, Screen, Title } from '@/components/ui';
 import { formatCents } from '@/engine/money';
-import { formatShiftDate } from '@/lib/format';
+import { formatShiftDate, keptShown } from '@/lib/format';
 import { useShiftStore } from '@/store/shiftStore';
 import { spacing } from '@/theme';
 
@@ -28,7 +28,8 @@ export default function HistoryScreen() {
               style={{ flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md }}
             >
               <Muted>Tipped out {formatCents(s.result.pool)}</Muted>
-              <Muted>Kept {formatCents(s.result.kept)}</Muted>
+              {/* Same figure as the Results headline (whole dollars shared in the bartender flow). */}
+              <Muted>Kept {formatCents(keptShown(s.result))}</Muted>
             </View>
           </Card>
         ))

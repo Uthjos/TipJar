@@ -2,7 +2,12 @@ import { format, parseISO } from 'date-fns';
 
 import { formatCents } from '@/engine/money';
 import { roleLabel } from '@/engine/profiles';
-import type { ShiftInput, ShiftResult } from '@/engine/types';
+import type { Basis, ShiftInput, ShiftResult } from '@/engine/types';
+
+/** 'netSales' -> "net sales". Used to label a profile's pool % with its basis (finding #27). */
+export function basisLabel(basis: Basis | undefined): string {
+  return basis === 'netSales' ? 'net sales' : basis === 'foodSales' ? 'food sales' : 'total tips';
+}
 
 /** 29.951 -> "30.0%" */
 export function formatPercent(p: number, digits = 1): string {
@@ -15,6 +20,22 @@ export function formatShiftDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/**
+ * The "You keep" / "Bar keeps" amount shown on Results, in the share text and in History.
+ * Bartender flow with bartenders listed: the whole dollars actually shared (kept - keptChange).
+ * Otherwise (server flow, or no bartenders listed yet): all of `kept`.
+ */
+export function keptShown(result: ShiftResult): number {
+  return result.keptSplit && result.keptSplit.length > 0
+    ? result.kept - result.keptChange
+    : result.kept;
+}
+
+/** Whether to show the leftover-change note: only when kept was actually shared out. */
+export function hasChangeNote(result: ShiftResult): boolean {
+  return !!result.keptSplit && result.keptSplit.length > 0 && result.keptChange > 0;
 }
 
 /** Note for the bar's leftover change, e.g. "$0.55 in change left over — stays with whoever closes out." */
@@ -43,9 +64,9 @@ export function buildShareText(input: ShiftInput, result: ShiftResult): string {
     lines.push(`${roleLabel(r.role)}: ${formatCents(r.amount)}${members ? ` — ${members}` : ''}`);
   }
   if (input.userRole === 'bartender') {
-    lines.push(`Bar keeps: ${formatCents(result.kept - result.keptChange)}`);
+    lines.push(`Bar keeps: ${formatCents(keptShown(result))}`);
     for (const k of result.keptSplit ?? []) lines.push(`  ${k.name} ${formatCents(k.amount)}`);
-    if (result.keptChange > 0) lines.push(`(${changeNote(result.keptChange)})`);
+    if (hasChangeNote(result)) lines.push(`(${changeNote(result.keptChange)})`);
   } else {
     lines.push(`I keep: ${formatCents(result.kept)}`);
   }

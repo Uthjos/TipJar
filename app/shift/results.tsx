@@ -8,7 +8,14 @@ import { calculateShift, EngineValidationError } from '@/engine/calculate';
 import { formatCents } from '@/engine/money';
 import { roleLabel } from '@/engine/profiles';
 import type { MissingRoleHandling, RoleResult, ShiftInput } from '@/engine/types';
-import { buildShareText, changeNote, formatPercent, formatShiftDate } from '@/lib/format';
+import {
+  buildShareText,
+  changeNote,
+  formatPercent,
+  formatShiftDate,
+  hasChangeNote,
+  keptShown as keptShownFor,
+} from '@/lib/format';
 import { buildShiftInput, selectProfile, useShiftStore } from '@/store/shiftStore';
 import { font, MIN_TAP, spacing, useColors } from '@/theme';
 
@@ -129,7 +136,7 @@ export default function ResultsScreen() {
   const isBartender = input.userRole === 'bartender';
   const shareText = buildShareText(input, result);
   // Bartender flow with whole-dollar rounding: the headline is the whole dollars actually shared.
-  const keptShown = result.kept - result.keptChange;
+  const keptShown = keptShownFor(result);
 
   const onShare = async () => {
     try {
@@ -200,7 +207,7 @@ export default function ResultsScreen() {
             Add the bartenders on shift (including you) to split what the bar keeps.
           </Banner>
         ) : null}
-        {result.keptChange > 0 ? <Muted>{changeNote(result.keptChange)}</Muted> : null}
+        {hasChangeNote(result) ? <Muted>{changeNote(result.keptChange)}</Muted> : null}
         {result.roundingAdjustment > 0 ? (
           <Muted>
             Rounded down to the dollar — {formatCents(result.roundingAdjustment)} stays with{' '}
