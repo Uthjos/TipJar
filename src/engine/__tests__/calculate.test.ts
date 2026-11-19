@@ -36,7 +36,11 @@ describe('default profiles (CLAUDE.md §4)', () => {
     expect(p.id).toBe('server-default');
     expect(p.appliesTo).toBe('server');
     expect(p.totalTipOutPercentOfTips).toBe(30);
-    expect(ruleFor(p, 'kitchen')).toMatchObject({ type: 'percentOfBasis', basis: 'foodSales', percent: 2 });
+    expect(ruleFor(p, 'kitchen')).toMatchObject({
+      type: 'percentOfBasis',
+      basis: 'foodSales',
+      percent: 2,
+    });
     const w = (role: string) => {
       const r = ruleFor(p, role);
       if (r.type !== 'shareOfRemainder') throw new Error(`${role} should be shareOfRemainder`);
@@ -53,7 +57,11 @@ describe('default profiles (CLAUDE.md §4)', () => {
     expect(p.id).toBe('bartender-default');
     expect(p.appliesTo).toBe('bartender');
     expect(p.totalTipOutPercentOfTips).toBe(30);
-    expect(ruleFor(p, 'kitchen')).toMatchObject({ type: 'percentOfBasis', basis: 'foodSales', percent: 2 });
+    expect(ruleFor(p, 'kitchen')).toMatchObject({
+      type: 'percentOfBasis',
+      basis: 'foodSales',
+      percent: 2,
+    });
     const barback = ruleFor(p, 'barback');
     const host = ruleFor(p, 'host');
     if (barback.type !== 'shareOfRemainder' || host.type !== 'shareOfRemainder') {
@@ -77,7 +85,10 @@ describe('rounding OFF', () => {
      * barback 3306 / 2 -> 1653 / 1653
      * kept = 34056 - 10217 = 23839
      */
-    const { result } = calculateShift(golden1Input({ roundToDollar: false }), SERVER_DEFAULT_PROFILE);
+    const { result } = calculateShift(
+      golden1Input({ roundToDollar: false }),
+      SERVER_DEFAULT_PROFILE,
+    );
     expect(result.pool).toBe(10217);
     expect(result.roundingAdjustment).toBe(0);
     expect(roleOf(result, 'kitchen').amount).toBe(1400);
@@ -99,7 +110,10 @@ describe('rounding OFF', () => {
      * barback members 4153 / 2 -> 2077 / 2076
      * kept = 19255 - 4393 = 14862 -> keptSplit 7431 / 7431
      */
-    const { result } = calculateShift(golden2Input({ roundToDollar: false }), BARTENDER_DEFAULT_PROFILE);
+    const { result } = calculateShift(
+      golden2Input({ roundToDollar: false }),
+      BARTENDER_DEFAULT_PROFILE,
+    );
     expect(result.pool).toBe(4393);
     expect(result.retained).toBe(1384);
     expect(result.roundingAdjustment).toBe(0);
@@ -123,7 +137,10 @@ describe('rounding OFF', () => {
 describe('rounding ON (§5.4)', () => {
   it('never pays out more than the unrounded pool', () => {
     const on = calculateShift(golden1Input({ roundToDollar: true }), SERVER_DEFAULT_PROFILE).result;
-    const off = calculateShift(golden1Input({ roundToDollar: false }), SERVER_DEFAULT_PROFILE).result;
+    const off = calculateShift(
+      golden1Input({ roundToDollar: false }),
+      SERVER_DEFAULT_PROFILE,
+    ).result;
     expect(on.pool).toBeLessThanOrEqual(off.pool);
     expect(on.pool + on.roundingAdjustment).toBe(off.pool);
   });
@@ -194,7 +211,7 @@ describe('hours: unequal splits (F4)', () => {
     ]);
   });
 
-  it('splits the bar\'s kept tips by hours (keptSplit)', () => {
+  it("splits the bar's kept tips by hours (keptSplit)", () => {
     // Golden 2 kept 14955; Joseph 6h / Aaron 4h -> 8973 / 5982
     const team = [
       member('Joseph', 'bartender', { id: 'joseph', hours: 6 }),
@@ -262,8 +279,16 @@ describe('hours: clock-in / clock-out across midnight (F4)', () => {
     // David 18:00 -> 00:00 (6h), Allen 21:00 -> 00:00 (3h): 3300 -> 2200 / 1100
     const team = [
       ...withoutRole(golden1Team(), 'barback'),
-      member('David', 'barback', { id: 'david', clockIn: '2026-11-17T18:00:00Z', clockOut: '2026-11-18T00:00:00Z' }),
-      member('Allen', 'barback', { id: 'allen', clockIn: '2026-11-17T21:00:00Z', clockOut: '2026-11-18T00:00:00Z' }),
+      member('David', 'barback', {
+        id: 'david',
+        clockIn: '2026-11-17T18:00:00Z',
+        clockOut: '2026-11-18T00:00:00Z',
+      }),
+      member('Allen', 'barback', {
+        id: 'allen',
+        clockIn: '2026-11-17T21:00:00Z',
+        clockOut: '2026-11-18T00:00:00Z',
+      }),
     ];
     const { result } = calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE);
     expect(memberAmounts(roleOf(result, 'barback'))).toEqual({ david: 2200, allen: 1100 });
@@ -273,8 +298,16 @@ describe('hours: clock-in / clock-out across midnight (F4)', () => {
   it('splits keptSplit by overnight clock times (proper next-day dates)', () => {
     // Joseph 20:00 -> 02:00 (6h), Aaron 22:00 -> 02:00 (4h): 14955 -> 8973 / 5982
     const team = [
-      member('Joseph', 'bartender', { id: 'joseph', clockIn: '2026-11-17T20:00:00Z', clockOut: '2026-11-18T02:00:00Z' }),
-      member('Aaron', 'bartender', { id: 'aaron', clockIn: '2026-11-17T22:00:00Z', clockOut: '2026-11-18T02:00:00Z' }),
+      member('Joseph', 'bartender', {
+        id: 'joseph',
+        clockIn: '2026-11-17T20:00:00Z',
+        clockOut: '2026-11-18T02:00:00Z',
+      }),
+      member('Aaron', 'bartender', {
+        id: 'aaron',
+        clockIn: '2026-11-17T22:00:00Z',
+        clockOut: '2026-11-18T02:00:00Z',
+      }),
       member('David', 'barback', { id: 'david' }),
       member('Allen', 'barback', { id: 'allen' }),
     ];
@@ -285,8 +318,16 @@ describe('hours: clock-in / clock-out across midnight (F4)', () => {
   it('treats a same-date clock-out earlier than clock-in as next day', () => {
     // Joseph 20:00 -> "02:00" same date (=> 6h), Aaron 22:00 -> "02:00" (=> 4h)
     const team = [
-      member('Joseph', 'bartender', { id: 'joseph', clockIn: '2026-11-17T20:00:00Z', clockOut: '2026-11-17T02:00:00Z' }),
-      member('Aaron', 'bartender', { id: 'aaron', clockIn: '2026-11-17T22:00:00Z', clockOut: '2026-11-17T02:00:00Z' }),
+      member('Joseph', 'bartender', {
+        id: 'joseph',
+        clockIn: '2026-11-17T20:00:00Z',
+        clockOut: '2026-11-17T02:00:00Z',
+      }),
+      member('Aaron', 'bartender', {
+        id: 'aaron',
+        clockIn: '2026-11-17T22:00:00Z',
+        clockOut: '2026-11-17T02:00:00Z',
+      }),
       member('David', 'barback', { id: 'david' }),
       member('Allen', 'barback', { id: 'allen' }),
     ];
@@ -297,7 +338,11 @@ describe('hours: clock-in / clock-out across midnight (F4)', () => {
   it('mixes `hours` and clock times within one role', () => {
     const team = [
       member('Joseph', 'bartender', { id: 'joseph', hours: 6 }),
-      member('Aaron', 'bartender', { id: 'aaron', clockIn: '2026-11-17T22:00:00Z', clockOut: '2026-11-18T02:00:00Z' }),
+      member('Aaron', 'bartender', {
+        id: 'aaron',
+        clockIn: '2026-11-17T22:00:00Z',
+        clockOut: '2026-11-18T02:00:00Z',
+      }),
       member('David', 'barback', { id: 'david' }),
       member('Allen', 'barback', { id: 'allen' }),
     ];
@@ -369,7 +414,10 @@ describe('missing roles (§5.1 step 3)', () => {
      * bartenders 5000 -> 2500 / 2500; barbacks 3800 -> 1900 / 1900
      */
     const { result } = calculateShift(
-      golden1Input({ team: withoutRole(golden1Team(), 'host'), missingRoleHandling: 'redistribute' }),
+      golden1Input({
+        team: withoutRole(golden1Team(), 'host'),
+        missingRoleHandling: 'redistribute',
+      }),
       SERVER_DEFAULT_PROFILE,
     );
     expect(roleOf(result, 'host')).toMatchObject({ amount: 0, missing: true, members: [] });
@@ -457,7 +505,10 @@ describe('missing roles (§5.1 step 3)', () => {
 describe('zero food sales', () => {
   it('rounding on: KTO is $0 and the whole pool is split 4:3:1', () => {
     // pool $102 split 4:3:1 -> 51 / 38.25 / 12.75 -> floors 101, 1 dollar -> host (.75) -> 51 / 38 / 13
-    const { result, warnings } = calculateShift(golden1Input({ foodSales: 0 }), SERVER_DEFAULT_PROFILE);
+    const { result, warnings } = calculateShift(
+      golden1Input({ foodSales: 0 }),
+      SERVER_DEFAULT_PROFILE,
+    );
     expect(roleOf(result, 'kitchen').amount).toBe(0);
     expect(roleOf(result, 'bartender').amount).toBe(5100);
     expect(roleOf(result, 'barback').amount).toBe(3800);
@@ -556,7 +607,13 @@ describe('custom profiles (F3)', () => {
       ],
     });
     const { result, warnings } = calculateShift(
-      shiftInput({ totalTips: 40000, netSales: 200000, foodSales: 80000, team: golden1Team(), profileId: 'custom' }),
+      shiftInput({
+        totalTips: 40000,
+        netSales: 200000,
+        foodSales: 80000,
+        team: golden1Team(),
+        profileId: 'custom',
+      }),
       p,
     );
     expect(result.pool).toBe(10000);
@@ -594,7 +651,14 @@ describe('custom profiles (F3)', () => {
       member('Hannah', 'host', { id: 'hannah' }),
     ];
     const { result } = calculateShift(
-      shiftInput({ userRole: 'bartender', totalTips: 30000, netSales: 100000, foodSales: 0, team, profileId: 'custom' }),
+      shiftInput({
+        userRole: 'bartender',
+        totalTips: 30000,
+        netSales: 100000,
+        foodSales: 0,
+        team,
+        profileId: 'custom',
+      }),
       p,
     );
     expect(result.pool).toBe(6000);
@@ -615,9 +679,18 @@ describe('custom profiles (F3)', () => {
         { role: 'host', type: 'shareOfRemainder', weight: 3 },
       ],
     });
-    const team = [member('Sam', 'busser', { id: 'sam' }), member('Hannah', 'host', { id: 'hannah' })];
+    const team = [
+      member('Sam', 'busser', { id: 'sam' }),
+      member('Hannah', 'host', { id: 'hannah' }),
+    ];
     const { result } = calculateShift(
-      shiftInput({ totalTips: 10000, netSales: 50000, foodSales: 20000, team, profileId: 'custom' }),
+      shiftInput({
+        totalTips: 10000,
+        netSales: 50000,
+        foodSales: 20000,
+        team,
+        profileId: 'custom',
+      }),
       p,
     );
     expect(roleOf(result, 'busser').amount).toBe(250);
@@ -638,7 +711,13 @@ describe('custom profiles (F3)', () => {
       member('David', 'barback', { id: 'david' }),
     ];
     const { result } = calculateShift(
-      shiftInput({ userRole: 'bartender', totalTips: 12345, netSales: 50000, team, profileId: 'custom' }),
+      shiftInput({
+        userRole: 'bartender',
+        totalTips: 12345,
+        netSales: 50000,
+        team,
+        profileId: 'custom',
+      }),
       p,
     );
     expect(result.pool).toBe(12345);
@@ -660,7 +739,13 @@ describe('custom profiles (F3)', () => {
       member('David', 'barback', { id: 'david' }),
     ];
     const { result, warnings } = calculateShift(
-      shiftInput({ userRole: 'bartender', totalTips: 10001, netSales: 50000, team, profileId: 'custom' }),
+      shiftInput({
+        userRole: 'bartender',
+        totalTips: 10001,
+        netSales: 50000,
+        team,
+        profileId: 'custom',
+      }),
       p,
     );
     expect(result.pool).toBe(0);
@@ -813,8 +898,16 @@ describe('validation errors (§5.3)', () => {
     // ASSUMPTION (findings #6): INVALID_CLOCK is for clock strings that do not parse.
     const team = [
       ...withoutRole(golden1Team(), 'barback'),
-      member('David', 'barback', { id: 'david', clockIn: 'not a time', clockOut: '2026-11-18T02:00:00Z' }),
-      member('Allen', 'barback', { id: 'allen', clockIn: '2026-11-17T20:00:00Z', clockOut: '2026-11-18T02:00:00Z' }),
+      member('David', 'barback', {
+        id: 'david',
+        clockIn: 'not a time',
+        clockOut: '2026-11-18T02:00:00Z',
+      }),
+      member('Allen', 'barback', {
+        id: 'allen',
+        clockIn: '2026-11-17T20:00:00Z',
+        clockOut: '2026-11-18T02:00:00Z',
+      }),
     ];
     expectValidationError(
       () => calculateShift(golden1Input({ team }), SERVER_DEFAULT_PROFILE),
@@ -843,7 +936,10 @@ describe('purity and determinism', () => {
       member('Joseph', 'bartender', { id: 'joseph' }),
       ...withoutRole(golden1Team(), 'bartender'),
     ];
-    const { result } = calculateShift(golden1Input({ team, roundToDollar: false }), SERVER_DEFAULT_PROFILE);
+    const { result } = calculateShift(
+      golden1Input({ team, roundToDollar: false }),
+      SERVER_DEFAULT_PROFILE,
+    );
     // 4409 -> first listed member (Aaron) gets the extra cent
     expect(roleOf(result, 'bartender').members.map((m) => [m.memberId, m.amount])).toEqual([
       ['aaron', 2205],

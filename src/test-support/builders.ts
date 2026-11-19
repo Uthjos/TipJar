@@ -134,7 +134,10 @@ export function paidRolesTotal(result: ShiftResult): Cents {
 }
 
 /** Assert that `fn` throws an EngineValidationError with the given code. */
-export function expectValidationError(fn: () => unknown, code: EngineValidationError['code']): void {
+export function expectValidationError(
+  fn: () => unknown,
+  code: EngineValidationError['code'],
+): void {
   let caught: unknown;
   try {
     fn();
@@ -155,6 +158,8 @@ export function deepFreeze<T>(obj: T): T {
 }
 
 /** Convenience custom-profile builder. */
-export function profile(p: Omit<TipOutProfile, 'id' | 'name'> & Partial<TipOutProfile>): TipOutProfile {
+export function profile(
+  p: Omit<TipOutProfile, 'id' | 'name'> & Partial<TipOutProfile>,
+): TipOutProfile {
   return { id: p.id ?? 'custom', name: p.name ?? 'Custom', ...p };
 }

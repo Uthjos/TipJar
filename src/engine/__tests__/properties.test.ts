@@ -2,7 +2,7 @@
  * Property-based tests (fast-check) for the calc engine invariants in CLAUDE.md §5.
  * Runs are seeded so the suite is deterministic; bump NUM_RUNS locally to fuzz harder.
  */
-import fc from 'fast-check';
+import * as fc from 'fast-check';
 import { calculateShift } from '../calculate';
 import { splitLargestRemainder } from '../money';
 import { BARTENDER_DEFAULT_PROFILE, SERVER_DEFAULT_PROFILE } from '../profiles';
@@ -229,7 +229,9 @@ describe('calculateShift properties', () => {
     fc.assert(
       fc.property(caseArb, (c) => {
         const res = run(c);
-        expect(res.roles.map((r) => r.role).sort()).toEqual(c.profile.rules.map((r) => r.role).sort());
+        expect(res.roles.map((r) => r.role).sort()).toEqual(
+          c.profile.rules.map((r) => r.role).sort(),
+        );
         const missing = res.roles.filter((r) => r.missing);
         expect(sum(missing.map((r) => r.amount))).toBe(res.retained);
         for (const r of missing) expect(r.members).toEqual([]);
