@@ -19,3 +19,6 @@ expo-env.d.ts
 *.pem
 .metro-health-check*
 .DS_Store
+
+# Agent worktrees
+.claude/worktrees/
