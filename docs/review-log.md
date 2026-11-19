@@ -159,3 +159,92 @@ History vs Results: these are now consistent. Both use `keptShown()` from `src/l
 - `npm run typecheck`: clean.
 - `npx prettier --check .`: all files formatted.
 - `git status`: clean.
+
+---
+
+# Round 3: owner decisions Q7–Q9
+
+Main started at `57c4053`, which records the owner's answers Q7–Q10 in CLAUDE.md §4, §5.4 steps 4–5, §5.5, §5.6 and §11. I re-read those sections before merging.
+
+## R3.1 Merges
+
+| Step                                     | Commit    | What                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Merge `feat/owner-decisions-2` (--no-ff) | `52723ec` | Adds `splitWholeDollars` and the hold-back accounting (`RoleResult.heldBack`, `ShiftResult.keptHeldBack`, both optional and set only when > 0), the `ZERO_SHARE_AFTER_ROUNDING` warning, `TeamMember.isUser`, and `userEarnings` in `src/lib/earnings.ts`. Results and the share text now explain held-back dollars, and History shows "You earned". The implementer's own tests were updated. |
+| Merge `test/owner-decisions-2` (--no-ff) | `4518acc` | New `wholeDollars.test.ts`; rewritten golden, calculate, properties and review tests; findings #31–#39.                                                                                                                                                                                                                                                                                        |
+| Engine                                   | `b964ce9` | #34: zero-share warning gated on having at least $1 to split.                                                                                                                                                                                                                                                                                                                                  |
+| UI                                       | `c34838f` | #37: the floor trim and the tie-held dollars are shown as separate notes.                                                                                                                                                                                                                                                                                                                      |
+| Spec                                     | `72f30eb` | CLAUDE.md wording clarifications (R3.4).                                                                                                                                                                                                                                                                                                                                                       |
+
+I merged both branches back to back with no conflicts and ran the checks after both merges: **284 passed, 0 failed** (14 suites); lint, typecheck and Prettier were clean. I did not run the checks between the two merges.
+
+## R3.2 Triage
+
+Nothing failed after the merge. The tester's stub matched the real implementation on every expected value, including:
+
+- the goldens (`pool` 10100 / 4200 / 5600, `roundingAdjustment` 117 / 177, Joseph and Aaron $75 / $75);
+- the #31 no-hand-down rule;
+- the #32 float-tie case.
+
+#39 (5 implementer tests failing) had already been fixed on the implementer's branch.
+
+One test changed as a result of accepting #34:
+
+| Test                                                                                                    | Category                                            | Resolution                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `impl.wholedollar › warns ZERO_SHARE_AFTER_ROUNDING for named $0 shares, only with whole-dollar splits` | (c) judgment call, decided by the coordinator (#34) | The test expected a warning with $3 tips, where the pool floors to $0, so there is nothing to split. That contradicts #34. I kept the test's intent (Hannah named, no warning with cent splits, none in Golden 1) by moving it to $10 tips: the pool is $3, the hosts' share rounds to $0, and Hannah gets $0. I also added an assertion that the $3 case does **not** warn. Not weakened: the test now asserts one more thing. |
+
+Totals: 0 implementation bugs and 0 test bugs found by merging. 1 judgment call (#34), which needed an engine change and an update to an implementer test.
+
+**#34 interpretation.** "At least $1 to split" is checked against the **floored pool** for role members and against `floorToDollar(kept)` for `keptSplit`, not against each role's own amount. With a per-role check, a host whose role share rounds to $0 out of a $3 pool would never be named, and that is exactly the case the owner's Q8 note is for. The tester's property ("always when a member got $0 of a non-empty split") still holds, because a non-empty role split implies a non-empty pool.
+
+## R3.3 Findings #31–#39
+
+| #   | Finding                                                         | Disposition                                         | Notes                                                                                                                                                                                                                                                                                                                                                             |
+| --- | --------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 31  | Held dollars aren't passed down to a smaller remainder          | **Accepted** (already implemented)                  | `splitWholeDollars` stops handing out dollars as soon as a tied group can't be fully served. Spelled out in §5.4 step 4.4 with the $3 at 7:7:1 example.                                                                                                                                                                                                           |
+| 32  | Float-safe tie detection                                        | **Accepted** (already implemented)                  | Remainders and hours are compared with EPS = 1e-9 in `splitWholeDollars`. Covered by the tester's 4:14:2 test. Documented in §5.4.                                                                                                                                                                                                                                |
+| 33  | Zero-share warning names a $0 `keptSplit` bartender             | **Accepted** (already implemented)                  | Tested by the tester. Documented in §5.4.                                                                                                                                                                                                                                                                                                                         |
+| 34  | Warn only when there was at least $1 to split                   | **Accepted** (changed)                              | Gated on the floored pool and on `floorToDollar(kept)` (see R3.2). Tests in `review.test.ts` and `impl.wholedollar.test.ts`.                                                                                                                                                                                                                                      |
+| 35  | 'redistribute' = 'retain' + retained only holds for cent splits | **Accepted, documented only**                       | No engine change. Noted in §5.4. The property tests it with `roundMemberShares: false`.                                                                                                                                                                                                                                                                           |
+| 36  | No zero-share warning with cent splits                          | **Accepted** (already implemented)                  | The warning only fires when whole-dollar member splits are on. Documented in §5.4.                                                                                                                                                                                                                                                                                |
+| 37  | Show the floor trim and held dollars separately                 | **Accepted** (changed, small)                       | `roundingParts()` in `src/lib/format.ts`. Results: "Rounded down to the dollar — $0.17 stays with you." plus "$1.00 kept back from tied whole-dollar shares — stays with you.", with the per-role `heldBack` note kept. The share text does the same. `heldBack` and `keptHeldBack` stay optional; documented in `types.ts` and §5.4. Tested in `format.test.ts`. |
+| 38  | Equal or no-hours splits always hold the odd dollar             | **Accepted, documented only. Owner awareness.**     | This follows from Q7. Documented in §5.4 as a consequence. Results already shows "$1.00 kept back — tied hours" on the role.                                                                                                                                                                                                                                      |
+| 39  | Implementer tests encoding pre-Q7 values                        | **Accepted** (resolved on the implementer's branch) | All pass after the merge.                                                                                                                                                                                                                                                                                                                                         |
+
+Counts (9 findings): **Accepted 9**. Two were behaviour changes (#34, #37), five were already implemented (#31, #32, #33, #36, #39), and two were documentation only (#35, #38). Nothing was rejected, and no new owner decision is needed. #38 is for owner awareness.
+
+**History vs Results.** History now shows `userEarnings` ("You earned"), as Q9 asks. That is a different figure from the Results headline ("Bar keeps" = whole dollars shared), and that's intended: Results now also has a "Your share" line equal to `userEarnings`, so History matches that line. The fallback when no bartender has `isUser` is all of `kept`. The store always adds "Me" with `isUser` in the bartender flow, so the fallback only applies to direct engine callers or old data.
+
+## R3.4 CLAUDE.md edits (wording only; owner decisions and golden values unchanged)
+
+All of these are in §5.4 step 4:
+
+1. **Step 4.4 (#31).** Held dollars are not handed down to smaller remainders or fewer hours. Added the example: $3 at 7:7:1 → $1 / $1 / $0, with $1 held.
+2. **Tie tolerance (#32).** Remainders and hours are compared with a 1e-9 tolerance.
+3. **Consequence (#38).** With equal hours or none entered, an odd dollar is always held back by the server or the bar. Example: Golden 1 barbacks.
+4. **`ZERO_SHARE_AFTER_ROUNDING` (#33, #34, #36).** It names role members and `keptSplit` bartenders. It fires only when there was at least $1 to hand out (floored pool / `floorToDollar(kept)`), and never with cent splits.
+5. **Notes and fields (#37).** Results and the share text show the floor trim and the held dollars separately. `heldBack` and `keptHeldBack` are present only when > 0.
+6. **Identity (#35).** `pool(redistribute) = pool(retain) + retained(retain)` holds only with cent-level splits.
+
+## R3.5 Owner awareness and decisions
+
+- **Consequence of Q7 (#38), for the owner to know about.** Whenever coworkers in a role have equal hours (including the default of no hours entered), an odd dollar in their share is always held back by the server or the bar. Examples:
+  - Golden 1 barbacks: $16 / $16 instead of the doc's $16.50 each.
+  - Three hosts sharing $11: $3 / $3 / $3, with $2 held.
+
+  This replaces the old bias toward the first-listed member with a bias toward the user. The user can keep up to (members − 1) dollars per role per shift. Results labels it "$1.00 kept back — tied hours" on the role.
+
+- No new owner decisions are needed from #31–#39.
+- Still open from §11: Q6 (cloud backup / accounts).
+
+## R3.6 Final check output (main @ HEAD)
+
+- `npm test`: **14 suites, 288 tests passed, 0 failed**.
+  - engine project: 13 suites, 284 tests.
+  - ui project: 1 suite, 4 tests.
+  - Round 3 added 4 tests: 2 in `review.test.ts` and 2 in `format.test.ts`. One assertion was added to `impl.wholedollar.test.ts`.
+- `npm run lint`: 0 errors, 0 warnings.
+- `npm run typecheck`: clean.
+- `npx prettier --check .`: all files formatted.
+- `git status`: clean.
