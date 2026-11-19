@@ -73,6 +73,7 @@ interface TeamMember {
   id: string;
   name: string;
   role: RoleId;
+  isUser?: boolean;          // true for the app's user ("Me"); used by History to attribute earnings
   hours?: number;            // total hours, OR
   clockIn?: string;          // ISO datetime
   clockOut?: string;         // ISO datetime (handle shifts past midnight)
@@ -102,7 +103,7 @@ interface ShiftResult {
   keptChange: Cents;                   // bartender flow: kept − sum(keptSplit) (cents left by the whole-dollar split; 0 when split to the cent; all of kept if no bartenders listed); server flow: 0
   retained: Cents;                     // share of absent roles kept back (missingRoleHandling = 'retain')
   roles: RoleResult[];
-  roundingAdjustment: Cents;           // how much rounding kept back (>= 0)
+  roundingAdjustment: Cents;           // how much rounding kept back (>= 0): pool cents trimmed by the floor + odd dollars held back from role splits (§5.4)
 }
 
 interface RoleResult {
@@ -163,8 +164,16 @@ When `roundToDollar` is on (this reproduces both examples in the source doc):
 1. **Floor the pool** to the whole dollar (e.g. $102.17 → $102; $57.77 → $57). Rounding never rounds the total up, so tip-out can never exceed earned tips (or the unrounded pool).
 2. Compute every carve-out (KTO) and role share **unrounded**, then allocate **whole dollars** across them with the largest-remainder method so they sum exactly to the floored pool. (Bartender example: KTO 2.40, barbacks 41.25, hosts 13.75 → $2 / $41 / $14 = $57.)
 3. The cents trimmed off the pool stay with the user / the bar and are reported as `roundingAdjustment`.
-4. Member amounts within a role are split from the rounded role amount **in whole dollars** (largest remainder, ties to the earlier member) — owner Q1. The engine option `roundMemberShares` now defaults to **true**; passing `false` restores cent-level member splits.
-5. **Bartender flow:** the bar's kept tips are also shared in whole dollars: `keptSplit` splits `floorToDollar(kept)` by hours, and the leftover cents are reported as `keptChange` (stays with whoever closes out) — owner Q2. `kept` itself is unchanged (`kept + pool = totalTips`), and `sum(keptSplit) + keptChange = kept`. The Results screen headline shows the whole-dollar amount (e.g. "Bar keeps $149") with a note for the change. With rounding off (or `roundMemberShares: false`), `keptSplit` is to the cent and `keptChange = 0`. If no bartenders are listed, `keptSplit` is empty and `keptChange = kept` (the identity still holds; the Results screen prompts to add bartenders and shows the full `kept`). Server flow: `keptChange = 0`.
+4. Member amounts within a role are split from the rounded role amount **in whole dollars** — owner Q1. The engine option `roundMemberShares` defaults to **true**; passing `false` restores cent-level member splits (largest remainder, ties to the earlier member). **Whole-dollar member split (owner Q7)** — used for role members and for `keptSplit`:
+   1. Each member's exact share = amount × hours / total hours (equal weights when no hours). Give everyone the floor in whole dollars.
+   2. Hand out the leftover dollars one at a time by **largest fractional remainder** (e.g. $33 at 7h/3h = $23.10 / $9.90 → $23 / $10).
+   3. Among members with equal remainders, prefer **more hours**.
+   4. If members are still tied (same remainder and same hours) and there aren't enough dollars for all of them, **none of them gets it** — those dollars are held back.
+   - Held back from a **role**: the role's `amount` is reduced to what members were paid, so `pool` drops and `kept` rises (the server keeps it; in the bartender flow it goes into the bar's kept tips). The held dollars are added to `roundingAdjustment`.
+   - Held back from **`keptSplit`**: added to `keptChange` (it stays with whoever closes out).
+   - Roles with no named members (kitchen) are not split, so nothing is held back there.
+   - If any member's whole-dollar share is $0, emit warning `ZERO_SHARE_AFTER_ROUNDING` naming them; the Results screen shows it as a note (owner Q8).
+5. **Bartender flow:** the bar's kept tips are also shared in whole dollars: `keptSplit` splits `floorToDollar(kept)` by hours, and the leftover cents — plus any odd dollars held back by the tie rule in step 4 — are reported as `keptChange` (stays with whoever closes out, and counts toward the user's earnings in History) — owner Q2/Q9. `kept` itself is unchanged (`kept + pool = totalTips`), and `sum(keptSplit) + keptChange = kept`. The Results screen headline shows the whole-dollar amount (e.g. "Bar keeps $149") with a note for the change. With rounding off (or `roundMemberShares: false`), `keptSplit` is to the cent and `keptChange = 0`. If no bartenders are listed, `keptSplit` is empty and `keptChange = kept` (the identity still holds; the Results screen prompts to add bartenders and shows the full `kept`). Server flow: `keptChange = 0`.
 - Property-test: for any input, `sum(roles) ≤ pool ≤ totalTips`.
 
 ### 5.5 Golden test (must pass exactly) — from the source doc
@@ -177,14 +186,14 @@ Expected output:
 
 | Role | Amount | Members |
 |---|---|---|
-| **Total tip-out** | **≈ $102 (30% → $102.17 unrounded)** | |
+| **Total tip-out** | **$101 paid** (30% → $102.17 → floor $102; $1 held back, see barbacks) | |
 | Kitchen (KTO) | $14.00 | — |
 | Bartenders | $44.00 | Joseph $22.00 · Aaron $22.00 |
-| Barbacks | $33.00 | David $17.00 · Allen $16.00 (doc shows $16.50 each; whole-dollar shares per owner Q1) |
+| Barbacks | $32.00 (of a $33 share) | David $16.00 · Allen $16.00 — equal hours tie on the odd dollar, so the server keeps it (owner Q7). Doc shows $16.50 each. |
 | Hosts | $11.00 | Hannah $11.00 |
 
-Working: pool = 30% × 340.56 = 102.17 → floor $102 → KTO 2% × 700.12 = 14.00 → remainder split 4:3:1 → whole dollars 14 / 44 / 33 / 11 = $102.
-Rounding kept back $0.17. Server keeps $238.56 (`kept` 23856, `keptChange` 0).
+Working: pool = 30% × 340.56 = 102.17 → floor $102 → KTO 2% × 700.12 = 14.00 → remainder split 4:3:1 → whole dollars 14 / 44 / 33 / 11 = $102 → barbacks' $33 splits $16.50 / $16.50 → $16 / $16, odd $1 held back → pool paid $101.
+`pool` 10100, `roundingAdjustment` 117 ($0.17 floor + $1 held), server keeps $239.56 (`kept` 23956, `keptChange` 0).
 
 ### 5.6 Golden test 2 — bartender example from the source doc
 
@@ -196,16 +205,16 @@ Expected:
 
 | Line | Amount |
 |---|---|
-| **Total tip-out pool** | 30% × 192.55 = 57.77 → **$57** |
+| **Total tip-out pool** | 30% × 192.55 = 57.77 → **$57** allocated; **$42 paid** (`pool` 4200) |
 | Kitchen (KTO) | **$2** (2% × 120 = 2.40) |
-| Barbacks | **$41** — David $21 / Allen $20 |
-| Hosts | **$14** — nobody on shift → retained by the bartenders |
-| Bartenders keep | **$149** shared (`kept` 14955, `keptChange` 55 = $0.55 change) |
-| Joseph / Aaron | **$75 / $74** (doc shows $74.50 each; whole dollars per owner Q1/Q2, tie → earlier member) |
+| Barbacks | **$40** of a $41 share — David $20 / Allen $20; odd $1 tied on hours → held back by the bar (owner Q7) |
+| Hosts | **$14** — nobody on shift → retained by the bartenders (`retained` 1400) |
+| Bartenders keep | **$150** shared (`kept` 15055, `keptChange` 55 = $0.55 change), `roundingAdjustment` 177 |
+| Joseph / Aaron | **$75 / $75** (doc shows $74.50 each) |
 
-Also test the same input with `missingRoleHandling = 'redistribute'`: hosts' $14 goes to the barbacks ($55 total → David $28 / Allen $27); `kept` 13555 → bartenders share $135 (Joseph $68 / Aaron $67), `keptChange` 55.
+Also test the same input with `missingRoleHandling = 'redistribute'`: hosts' $14 goes to the barbacks ($55 share → David $27 / Allen $27, $1 held back → `pool` 5600); `kept` 13655 → bartenders share $136 (Joseph $68 / Aaron $68), `keptChange` 55, `roundingAdjustment` 177.
 
-With `roundMemberShares: false` the old cent-level values apply: barbacks $20.50 / $20.50, keptSplit $74.78 / $74.77, `keptChange` 0.
+With `roundMemberShares: false` the cent-level values apply (nothing held back): barbacks $41 → $20.50 / $20.50, `pool` 4300, `kept` 14955, keptSplit $74.78 / $74.77, `keptChange` 0, `roundingAdjustment` 77.
 
 Add tests for: rounding off, unequal hours (for tip-out roles and for the bartenders sharing kept tips), clock-in/out across midnight, both missing-role options, zero food sales, custom profile.
 
@@ -303,6 +312,10 @@ Answered by the owner (2026-11-18):
 - Q4 **Percent basis** → support a pool that's a % of sales via `poolBasis` (§4, §5.1). Profile-editor UI for it lands with milestone 5.
 - Q5 (review) **Equal clock-in and clock-out** → show an error (`INVALID_CLOCK`), not a 24-hour shift.
 
+- Q7 **Odd dollar in a whole-dollar split** → closest exact share gets it (largest remainder); ties → most hours; still tied → held back by the server / the bar (§5.4 step 4).
+- Q8 **$0 shares after rounding** → allowed, with a note on Results (`ZERO_SHARE_AFTER_ROUNDING`).
+- Q9 **Change in History** → `keptChange` counts toward the user's earnings. Bartender flow: user's earnings = their `keptSplit` amount (member with `isUser`) + `keptChange`. Server flow: `kept`.
+- Q10 **Receipt formats** → support **Toast, Square and Aloha** first (milestone 8). Sample report photos still wanted.
+
 Still open:
-5. **Receipt formats:** which POS systems' reports should scanning support first? Sample photos would help.
 6. **Cloud backup / accounts:** needed for v1, or local-only is fine?
