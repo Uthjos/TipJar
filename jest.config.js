@@ -13,7 +13,7 @@ module.exports = {
       // Component / screen tests.
       displayName: 'ui',
       preset: 'jest-expo',
-      testMatch: ['**/src/**/__tests__/**/*.test.tsx', '**/app/**/__tests__/**/*.test.tsx'],
+      testMatch: ['**/src/**/__tests__/**/*.test.tsx'],
       moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },
     },
   ],

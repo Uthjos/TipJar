@@ -54,6 +54,19 @@ const ROLE_LABELS: Record<string, string> = {
   server: 'Servers',
 };
 
+const ROLE_SINGULAR: Record<string, string> = {
+  kitchen: 'Kitchen',
+  bartender: 'Bartender',
+  barback: 'Barback',
+  host: 'Host',
+  server: 'Server',
+};
+
+/** Human-readable singular label, e.g. 'barback' -> "Barback". */
+export function roleSingular(role: string): string {
+  return ROLE_SINGULAR[role] ?? role.charAt(0).toUpperCase() + role.slice(1);
+}
+
 /** Human-readable (plural) label for a role id; custom roles are title-cased. */
 export function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role.charAt(0).toUpperCase() + role.slice(1);
