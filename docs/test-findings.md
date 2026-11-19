@@ -6,6 +6,8 @@ Author: Agent 2 (Tester), branch `test/engine`; updated on `test/owner-decisions
 
 **Update (test/owner-decisions-2):** encodes owner Q7–Q9. Whole-dollar member splits use floor, then largest remainder, then more hours; members still tied get none and those dollars are held back. Held dollars from a role reduce `pool`, raise `kept` and add to `roundingAdjustment`; held dollars from `keptSplit` add to `keptChange`. Also covered: the `ZERO_SHARE_AFTER_ROUNDING` warning, `TeamMember.isUser` being ignored by the engine, and the new `splitWholeDollars` helper (`wholeDollars.test.ts`). Golden values follow CLAUDE.md §5.5/§5.6 at `57c4053`. #23 (tie bias to the first member) is superseded by Q7. New findings start at **#31**.
 
+**Update (test/m4-persistence):** milestone 4 acceptance tests against `docs/m4-contract.md`: `src/db/__tests__/{migrations,seed,repositories,snapshot}.test.ts`, plus fixtures in `src/test-support/shiftFixtures.ts`. They were run against a throwaway sql.js stub of the contract outside the repo (not committed); the stub was also deliberately broken to confirm the tests catch ordering, null-vs-absent and missing-cascade bugs. New findings start at **#40**.
+
 The suite lives in `src/engine/__tests__/` (`money`, `hours`, `calculate`, `golden`, `properties`). Builders are in `src/test-support/builders.ts`. Every expected value is worked out by hand in a comment next to the assertion. Before committing, the suite was type-checked and run against a throwaway reference stub outside the repo: 147 tests passed, and the files compile under `strict` + `noUncheckedIndexedAccess` + `noUnusedLocals`. The stub was written from the same reading of the spec, so this proves the tests agree with each other. It does not prove they match the real implementation.
 
 Each item below gives **what**, **why**, a **proposed resolution**, and the **affected tests** (`file › describe › it`, abbreviated).
@@ -325,6 +327,101 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 
 ---
 
+## F. Milestone 4 persistence (test/m4-persistence)
+
+### 40. Column names aren't in the contract
+
+- **What:** The contract names tables but not columns. The migration tests therefore rely on:
+  - the version appearing as _some_ value in `schema_version`;
+  - `shifts` being an ordinary rowid table (the direct-SQL cascade test deletes `WHERE rowid = …`);
+  - one `shift_members` row per team member;
+  - a name heuristic for "money columns are INTEGER": columns matching `/tip|sales|amount|pool|kept|retained|cents|adjust|change|held/` (excluding hours, percent, weight, date and id) must hold integers, and must not be declared REAL.
+- **Why:** If money is stored only inside a JSON column, the integer check passes trivially. If a column is named unexpectedly (for example `tot`), it isn't checked at all.
+- **Resolution:** Add column names to the contract, or a naming convention such as `*_cents` for money. Then the test can check those columns exactly.
+- **Tests:** `migrations › money is stored as INTEGER cents (no floats) › *`, `migrations › cascade deletes › *`.
+
+### 41. `listShifts` ordering ties, and how `savedAt` is compared
+
+- **What:** The contract orders by "newest date first, then newest savedAt". It doesn't say what happens when two shifts share both `date` and `savedAt`. It also doesn't say how `savedAt` is compared: as text, mixed formats such as `…Z` vs `+00:00`, or with and without milliseconds, sort wrongly.
+- **Resolution:** Add a final tie-break, for example newest insert (`rowid DESC`) or `id`. Store `savedAt` normalised with `toISOString()`. The tests avoid exact ties and use one ISO format.
+- **Tests:** `repositories › shifts › listShifts › *`.
+
+### 42. `listCoworkers` order for never-worked coworkers and name case
+
+- **What:** "Most recently worked first, then name" doesn't place coworkers with no `lastWorked`, and doesn't say whether the name sort is case-sensitive or locale-aware.
+- **Resolution:** The tests assume never-worked coworkers sort **last**, then by name. The test names avoid mixed case. Use a case-insensitive name sort (`COLLATE NOCASE`, or JS `localeCompare`).
+- **Tests:** `repositories › coworkers › listCoworkers: most recently worked first, then by name; never-worked last`.
+
+### 43. `updateShift` and `savedAt`
+
+- **What:** The contract doesn't say whether `updateShift` keeps the original `savedAt` or bumps it. Bumping would re-sort an edited shift within its date.
+- **Resolution:** The tests assume `savedAt` is **kept**, along with `id`. If edit time is wanted, add a separate `updatedAt`.
+- **Tests:** `repositories › shifts › updateShift replaces input and result, keeping id and savedAt`.
+
+### 44. Seeding after the user deletes every profile
+
+- **What:** "Only if the profiles table is empty" means deleting both defaults, with no custom profiles, brings both back on the next `initDb`. Deleting just one is respected.
+- **Resolution:** Keep this; the app always needs at least one profile. The profile editor (M5) should probably block deleting the last one anyway. The test encodes the contract as written.
+- **Tests:** `seed › reseeds both defaults once every profile has been deleted (table empty)`, `seed › does not reseed a default the user deleted while other profiles exist`.
+
+### 45. `rememberTeam` matches across roles
+
+- **What:** Matching is by name only, so "Sam" the host and "Sam" the barback become one coworker, and a one-off cover shift flips `usualRole`. The tests assert this contract behaviour: one coworker, with `usualRole` set to the role just worked.
+- **Resolution:** Accept for v1. If it bites, match on (name, role) or keep a role history, and add a "these are different people" option in the coworker list (M5).
+- **Tests:** `repositories › coworkers › rememberTeam › updates usualRole to the role just worked (matching ignores role)`.
+
+### 46. Placeholder names such as "Barback 2"
+
+- **What:** If **Who worked** pre-fills unnamed slots with placeholders ("Barback 2", "Bartender 1"), `rememberTeam` will save them as coworkers. They then pollute quick-add, and different people merge under one placeholder.
+- **Resolution:** The UI should leave unnamed members blank (blank names are skipped), or flag placeholders (for example `TeamMember.isPlaceholder`) so `rememberTeam` skips them. A regex on `/^<role> \d+$/i` is a fallback. Not tested; the contract doesn't cover it.
+
+### 47. Which spelling wins when a name matches
+
+- **What:** When "joseph" matches a saved "Joseph", the contract doesn't say which spelling is stored. It also doesn't say whether a new name is stored trimmed.
+- **Resolution:** Keep the existing spelling, and store new names trimmed. The tests only assert the trimmed new name and that the coworker `id` is stable, not which spelling wins.
+- **Tests:** `repositories › coworkers › rememberTeam › stores a new name trimmed`, `… › matches existing coworkers by case-insensitive, trimmed name (no duplicates)`.
+
+### 48. `lastWorked` can move backwards
+
+- **What:** Saving or editing an **older** shift calls `rememberTeam` with an older date. "lastWorked = date" then moves a coworker down the quick-add list.
+- **Resolution:** Use `lastWorked = max(existing, date)`, and only change `usualRole` when the date is at least the existing `lastWorked`. Not tested.
+
+### 49. Case-insensitive matching of non-ASCII names
+
+- **What:** SQLite's `lower()` and `NOCASE` only fold ASCII, so "Zoë" and "ZOË" won't match if the comparison is done in SQL.
+- **Resolution:** Normalise in JS (`name.trim().normalize('NFC').toLocaleLowerCase()`), or store a normalised key column. Not tested. The tests only check that non-ASCII names and quotes round-trip.
+
+### 50. Duplicate names within one team
+
+- **What:** Two members both called "Sam" in one shift collapse into one coworker, and the last role wins.
+- **Resolution:** Accept for v1; tie this to #45. Not tested.
+
+### 51. Optional fields must stay absent, not null
+
+- **What:** "Deep-equal" with Jest's `toEqual` treats a missing key and `undefined` as equal, but treats `null` as different. The tests require optional fields (`poolBasis`, `lastWorked`, `heldBack`, `keptHeldBack`, `keptSplit`, `isUser`, `hours`, `clockIn`/`clockOut`) to come back absent, not `null`. They also require nothing extra to appear after a JSON round-trip.
+- **Resolution:** State this in the contract. When reading from nullable columns, omit null values rather than copying them through.
+- **Tests:** `snapshot › saved shifts are snapshots › *: getShift deep-equals what was saved`, `repositories › profiles › each poolBasis value round-trips, and an absent poolBasis stays absent`, `repositories › coworkers › a coworker who never worked has no lastWorked …`.
+
+### 52. Settings edge cases
+
+- **What:** The contract doesn't define:
+  - `setSetting(key, undefined)`, which has no JSON form;
+  - a stored value that fails `JSON.parse` (a corrupt row).
+- **Resolution:** Treat `undefined` as delete. Return the fallback on a parse error. Not tested. The tests do check that a stored `false` / `0` / `''` is returned rather than the fallback, and that a JSON-looking string stays a string.
+
+### 53. Order of the two defaults in `listProfiles`
+
+- **What:** "Default profiles first" doesn't say whether Server comes before Bartender, and doesn't give the collation for the name sort.
+- **Resolution:** The tests accept either order for the two defaults. Suggest: the default for the user's role first in the UI, decided by the store, not the repository.
+- **Tests:** `repositories › profiles › listProfiles: default profiles first, then the rest by name`.
+
+### 54. Saved shifts can reference a deleted profile
+
+- **What:** After `deleteProfile`, saved shifts still carry the old `input.profileId`. The snapshot rule makes viewing them safe, but **Edit** on such a shift (re-calculate) has no profile to load.
+- **Resolution:** The History edit flow should fall back to the current default profile for the shift's `userRole`, and tell the user. Not an engine or repository test.
+
+---
+
 ## Coverage map vs. the brief
 
 | Brief item                                                              | Where                                                                      |
@@ -348,3 +445,7 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 | Odd-dollar rule and held-back dollars (owner Q7)                        | `wholeDollars.test.ts`, `golden`, `calculate › whole-dollar held-back …`   |
 | `ZERO_SHARE_AFTER_ROUNDING` (owner Q8)                                  | `calculate › ZERO_SHARE_AFTER_ROUNDING warning`, `properties`              |
 | `TeamMember.isUser` ignored by the engine (owner Q9)                    | `calculate › TeamMember.isUser …`, `properties`                            |
+| M4: schema, version, idempotent migrate, cascades, integer money        | `src/db/__tests__/migrations.test.ts`                                      |
+| M4: default-profile seeding                                             | `src/db/__tests__/seed.test.ts`                                            |
+| M4: profiles / shifts / coworkers / settings repositories               | `src/db/__tests__/repositories.test.ts`                                    |
+| M4: saved shifts are snapshots (incl. fast-check round-trip)            | `src/db/__tests__/snapshot.test.ts`                                        |
