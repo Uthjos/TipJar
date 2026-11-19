@@ -97,12 +97,8 @@ describe('profiles', () => {
       await saveProfile(db, { ...NET_SALES_PROFILE, id, name });
     }
     const list = await listProfiles(db);
-    expect(
-      list
-        .slice(0, 2)
-        .map((p) => p.id)
-        .sort(),
-    ).toEqual(['bartender-default', 'server-default']);
+    // Review round 4 (#53): Server default first, then Bartender default (built-in order).
+    expect(list.slice(0, 2).map((p) => p.id)).toEqual(['server-default', 'bartender-default']);
     expect(list.slice(2).map((p) => p.name)).toEqual(['Apple split', 'Mango split', 'Zebra split']);
     // listed profiles carry their rules in order too
     expect(list.find((p) => p.id === 'server-default')).toEqual(SERVER_DEFAULT_PROFILE);

@@ -245,13 +245,23 @@ function shiftColumns(input: ShiftInput): SqlParam[] {
   ];
 }
 
+/**
+ * savedAt is stored as `Date#toISOString()` (UTC, milliseconds, `Z`) so text ordering is time
+ * ordering (review round 4, #41). An unparseable value is stored as given.
+ */
+function normaliseSavedAt(savedAt: string | undefined): string {
+  if (savedAt === undefined) return new Date().toISOString();
+  const ms = Date.parse(savedAt);
+  return Number.isNaN(ms) ? savedAt : new Date(ms).toISOString();
+}
+
 /** Save a shift snapshot. Returns its id (generated when absent). */
 export async function saveShift(
   db: Db,
   s: { input: ShiftInput; result: ShiftResult; id?: string; savedAt?: string },
 ): Promise<string> {
   const id = s.id ?? generateId('shift');
-  const savedAt = s.savedAt ?? new Date().toISOString();
+  const savedAt = normaliseSavedAt(s.savedAt);
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `INSERT INTO shifts (id, saved_at, date, user_role, profile_id, total_tips, net_sales,
@@ -275,7 +285,10 @@ export async function getShift(db: Db, id: string): Promise<SavedShift | null> {
   return row ? toSavedShift(row) : null;
 }
 
-/** Shifts by `input.date` (inclusive yyyy-MM-dd bounds), newest date first, then newest save. */
+/**
+ * Shifts by `input.date` (inclusive yyyy-MM-dd bounds), newest date first, then newest savedAt,
+ * then newest insert (rowid), then id (review round 4, #41).
+ */
 export async function listShifts(
   db: Db,
   range: { from?: string; to?: string } = {},
@@ -292,7 +305,7 @@ export async function listShifts(
   }
   const rows = await db.getAllAsync<ShiftRow>(
     `${SHIFT_SELECT}${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
-     ORDER BY s.date DESC, s.saved_at DESC, s.id DESC`,
+     ORDER BY s.date DESC, s.saved_at DESC, s.rowid DESC, s.id DESC`,
     params,
   );
   return rows.map(toSavedShift).filter((s): s is SavedShift => s !== null);
@@ -344,9 +357,12 @@ function toCoworker(r: CoworkerRow): Coworker {
   return c;
 }
 
-/** Case-insensitive, trimmed name used to match coworkers. */
+/**
+ * Case-insensitive, trimmed, Unicode-normalised name used to match coworkers. Done in JS because
+ * SQLite's lower()/NOCASE only fold ASCII ("Zoë" vs "ZOË") — review round 4, #49.
+ */
 export function coworkerKey(name: string): string {
-  return name.trim().toLowerCase();
+  return name.trim().normalize('NFC').toLocaleLowerCase();
 }
 
 /** Most recently worked first (never-worked last), then by name. */
@@ -359,9 +375,10 @@ export async function listCoworkers(db: Db): Promise<Coworker[]> {
 }
 
 /**
- * Insert or update a coworker. With an id: updates that row (inserting it if missing). Without:
- * matches an existing coworker by case-insensitive trimmed name, else inserts. A missing
- * `lastWorked` keeps the stored one. Returns the coworker's id.
+ * Insert or update a coworker. With an id: updates that row (inserting it if missing), including
+ * its name. Without: matches an existing coworker by `coworkerKey(name)` and keeps the existing
+ * spelling, else inserts the trimmed name. A missing `lastWorked` keeps the stored one. Returns
+ * the coworker's id.
  */
 export async function upsertCoworker(
   db: Db,
@@ -381,12 +398,22 @@ export async function upsertCoworker(
     );
   }
   if (existing) {
-    await db.runAsync(
-      `UPDATE coworkers SET name = ?, name_key = ?, usual_role = ?,
-         last_worked = COALESCE(?, last_worked)
-       WHERE id = ?`,
-      [name, key, c.usualRole, c.lastWorked ?? null, existing.id],
-    );
+    if (c.id) {
+      // Explicit id (e.g. renaming in coworker management): the new spelling is stored.
+      await db.runAsync(
+        `UPDATE coworkers SET name = ?, name_key = ?, usual_role = ?,
+           last_worked = COALESCE(?, last_worked)
+         WHERE id = ?`,
+        [name, key, c.usualRole, c.lastWorked ?? null, existing.id],
+      );
+    } else {
+      // Matched by name: keep the existing spelling (review round 4, #47).
+      await db.runAsync(
+        `UPDATE coworkers SET usual_role = ?, last_worked = COALESCE(?, last_worked)
+         WHERE id = ?`,
+        [c.usualRole, c.lastWorked ?? null, existing.id],
+      );
+    }
     return existing.id;
   }
   const id = c.id ?? generateId('cw');
@@ -402,13 +429,20 @@ export async function deleteCoworker(db: Db, id: string): Promise<void> {
 }
 
 /**
- * After saving a shift: upsert each named member by case-insensitive trimmed name, setting
- * usualRole to the role they just worked and lastWorked = date. Skips isUser members and blank
- * names.
+ * After saving a shift: upsert each named member by `coworkerKey(name)`. Skips isUser members and
+ * blank names. lastWorked never moves backwards (review round 4, #48): it becomes the later of the
+ * stored value and `date`, and usualRole only changes to the role just worked when `date` is on or
+ * after the stored lastWorked. So saving or editing an older shift doesn't demote anyone in
+ * quick-add or flip their usual role.
  */
 export async function rememberTeam(db: Db, team: TeamMember[], date: string): Promise<void> {
   for (const m of team) {
     if (m.isUser || !m.name || m.name.trim() === '') continue;
+    const existing = await db.getFirstAsync<{ id: string; last_worked: string | null }>(
+      'SELECT id, last_worked FROM coworkers WHERE name_key = ? ORDER BY id LIMIT 1',
+      [coworkerKey(m.name)],
+    );
+    if (existing && existing.last_worked && date < existing.last_worked) continue;
     await upsertCoworker(db, { name: m.name, usualRole: m.role, lastWorked: date });
   }
 }
@@ -430,7 +464,16 @@ export async function getSetting<T>(db: Db, key: string, fallback: T): Promise<T
   }
 }
 
+/**
+ * Store a JSON-encoded setting. `undefined` has no JSON form, so it deletes the key and later
+ * reads return the fallback (review round 4, #52). A stored value that fails to parse also reads
+ * as the fallback (see getSetting).
+ */
 export async function setSetting<T>(db: Db, key: string, value: T): Promise<void> {
+  if (value === undefined) {
+    await db.runAsync('DELETE FROM settings WHERE key = ?', [key]);
+    return;
+  }
   await db.runAsync(
     `INSERT INTO settings (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,

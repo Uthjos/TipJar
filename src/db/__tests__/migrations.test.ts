@@ -138,37 +138,41 @@ describe('cascade deletes (ON DELETE CASCADE)', () => {
 });
 
 describe('money is stored as INTEGER cents (no floats)', () => {
-  // Columns whose names look like money must hold SQLite integers. Columns for hours, clock
-  // times, percentages and weights may legitimately be REAL. (Column names are not in the
-  // contract; see findings #40.)
-  const MONEY = /tip|sales|amount|pool|kept|retained|cents|adjust|change|held/i;
-  const NON_MONEY = /hour|clock|percent|pct|weight|rate|version|basis|date|_at$|savedat|id$/i;
+  // Money columns are pinned in docs/m4-contract.md (review round 4, #40), so check them exactly
+  // instead of guessing from column names.
+  const MONEY_COLUMNS: Record<string, string[]> = {
+    shifts: ['total_tips', 'net_sales', 'food_sales'],
+    shift_results: ['pool', 'kept', 'kept_change', 'retained', 'rounding_adjustment'],
+  };
 
-  it('every stored value in a money-like column is an integer', async () => {
+  it('the pinned money columns exist and are declared INTEGER', async () => {
     await initDb(db);
-    for (const f of shiftFixtures()) await saveShift(db, { input: f.input, result: f.result });
-
-    for (const table of ['shifts', 'shift_members', 'shift_results'] as const) {
+    for (const [table, money] of Object.entries(MONEY_COLUMNS)) {
       const cols = await db.getAllAsync<{ name: string; type: string }>(
         `PRAGMA table_info(${table})`,
       );
-      for (const col of cols) {
-        if (!MONEY.test(col.name) || NON_MONEY.test(col.name)) continue;
-        const types = await db.getAllAsync<{ t: string }>(
-          `SELECT DISTINCT typeof("${col.name}") AS t FROM ${table}`,
-        );
-        for (const { t } of types) {
-          expect({ table, column: col.name, type: t }).toEqual({
-            table,
-            column: col.name,
-            type: expect.stringMatching(/^(integer|null|text)$/),
-          });
-        }
-        // a money column declared REAL/FLOAT would store 100 as 100.0
-        expect({ table, column: col.name, declared: col.type.toUpperCase() }).not.toEqual({
+      for (const name of money) {
+        expect({
           table,
-          column: col.name,
-          declared: expect.stringMatching(/REAL|FLOA|DOUB/),
+          name,
+          type: cols.find((c) => c.name === name)?.type.toUpperCase(),
+        }).toEqual({ table, name, type: 'INTEGER' });
+      }
+    }
+  });
+
+  it('every stored value in a money column is an integer', async () => {
+    await initDb(db);
+    for (const f of shiftFixtures()) await saveShift(db, { input: f.input, result: f.result });
+    for (const [table, money] of Object.entries(MONEY_COLUMNS)) {
+      for (const name of money) {
+        const types = await db.getAllAsync<{ t: string }>(
+          `SELECT DISTINCT typeof("${name}") AS t FROM ${table}`,
+        );
+        expect({ table, name, types: types.map((x) => x.t) }).toEqual({
+          table,
+          name,
+          types: ['integer'],
         });
       }
     }

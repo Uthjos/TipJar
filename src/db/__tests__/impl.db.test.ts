@@ -151,8 +151,9 @@ describe('coworkers + settings', () => {
       '2026-11-10',
     );
     const list = await listCoworkers(db);
+    // Review round 4 (#47): a name match keeps the existing spelling ("Aaron", not "aaron").
     expect(list.map((c) => [c.name, c.usualRole, c.lastWorked])).toEqual([
-      ['aaron', 'barback', '2026-11-10'],
+      ['Aaron', 'barback', '2026-11-10'],
       ['Zoe', 'host', '2026-11-10'],
       ['Allen', 'barback', '2026-11-01'],
       ['David', 'barback', '2026-11-01'],
