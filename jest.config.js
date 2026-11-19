@@ -1,20 +1,26 @@
+// Agent worktrees under .claude/ contain their own copies of the repo; keep Jest out of them.
+const shared = {
+  preset: 'jest-expo',
+  moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/.claude/'],
+  modulePathIgnorePatterns: ['<rootDir>/.claude/'],
+};
+
 /** @type {import('jest').Config} */
 module.exports = {
   projects: [
     {
       // Pure TypeScript engine / logic tests — no React Native runtime needed.
+      ...shared,
       displayName: 'engine',
-      preset: 'jest-expo',
       testEnvironment: 'node',
       testMatch: ['**/src/**/__tests__/**/*.test.ts'],
-      moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },
     },
     {
       // Component / screen tests.
+      ...shared,
       displayName: 'ui',
-      preset: 'jest-expo',
       testMatch: ['**/src/**/__tests__/**/*.test.tsx'],
-      moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },
     },
   ],
 };
