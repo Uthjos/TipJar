@@ -47,10 +47,12 @@ export type Basis = 'foodSales' | 'netSales' | 'totalTips';
 /**
  * A rule either takes a fixed % of some basis (carved out of the pool first),
  * or takes a weighted share of whatever remains of the pool.
+ * `label` is a display name for custom roles (role = roleIdFromLabel(label)); the engine ignores
+ * it. Built-in roles have no label.
  */
 export type TipOutRule =
-  | { role: RoleId; type: 'percentOfBasis'; basis: Basis; percent: number }
-  | { role: RoleId; type: 'shareOfRemainder'; weight: number };
+  | { role: RoleId; label?: string; type: 'percentOfBasis'; basis: Basis; percent: number }
+  | { role: RoleId; label?: string; type: 'shareOfRemainder'; weight: number };
 
 export interface TipOutProfile {
   id: string;

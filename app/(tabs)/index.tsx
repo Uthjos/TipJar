@@ -6,11 +6,11 @@ import {
   Banner,
   Button,
   Card,
+  ChipRow,
   Field,
   Input,
   MoneyInput,
   Screen,
-  Segmented,
   ToggleRow,
 } from '@/components/ui';
 import { selectProfile, useShiftStore } from '@/store/shiftStore';
@@ -44,11 +44,15 @@ export default function NewShiftScreen() {
     >
       <Card>
         <Field label="I'm checking out as">
-          <Segmented
+          <ChipRow
             accessibilityLabel="Tip-out profile"
             value={profile.id}
             onChange={setProfile}
-            options={profiles.map((p) => ({ value: p.id, label: p.name }))}
+            options={profiles.map((p) => ({
+              value: p.id,
+              label: p.name,
+              hint: p.appliesTo === 'bartender' ? 'Bartender' : 'Server',
+            }))}
           />
         </Field>
       </Card>

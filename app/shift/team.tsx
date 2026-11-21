@@ -3,13 +3,13 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Body, Button, Card, Input, Muted, Screen, Segmented, Title } from '@/components/ui';
-import { roleLabel, roleSingular } from '@/engine/profiles';
+import { roleNames } from '@/lib/profiles';
 import type { RoleId, TeamMember } from '@/engine/types';
 import { quickAddCoworkers, selectProfile, teamRolesFor, useShiftStore } from '@/store/shiftStore';
 import { font, MIN_TAP, radius, spacing, useColors } from '@/theme';
 
 function singular(role: RoleId) {
-  return roleSingular(role).toLowerCase();
+  return roleNames(selectProfile(useShiftStore.getState()), role).singular.toLowerCase();
 }
 
 type HoursMode = 'hours' | 'clock';
@@ -165,7 +165,7 @@ export default function TeamScreen() {
                   + {cw.name}
                 </Text>
                 <Text style={{ color: c.textMuted, fontSize: font.small }}>
-                  {roleSingular(cw.usualRole)}
+                  {roleNames(profile, cw.usualRole).singular}
                 </Text>
               </Pressable>
             ))}
@@ -178,14 +178,20 @@ export default function TeamScreen() {
         return (
           <Card key={role}>
             <View>
-              <Title>{isBarShare ? 'Bartenders (incl. you)' : roleLabel(role)}</Title>
+              <Title>
+                {isBarShare ? 'Bartenders (incl. you)' : roleNames(profile, role).plural}
+              </Title>
               {isBarShare ? <Muted>Share what the bar keeps after tip-out.</Muted> : null}
             </View>
             {members.length === 0 ? (
               <Body style={{ fontStyle: 'italic' }}>Nobody yet</Body>
             ) : (
               members.map((m, i) => (
-                <MemberRow key={m.id} member={m} placeholder={`${roleSingular(role)} ${i + 1}`} />
+                <MemberRow
+                  key={m.id}
+                  member={m}
+                  placeholder={`${roleNames(profile, role).singular} ${i + 1}`}
+                />
               ))
             )}
             <Button
