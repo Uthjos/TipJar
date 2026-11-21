@@ -97,9 +97,30 @@ function MemberRow({
     // Commit only a normalised "HH:mm" (never ISO); anything unreadable stays uncommitted.
     updateMember(member.id, { [field]: parseTimeInput(text) ?? undefined });
   };
-  const normaliseClock = (field: 'clockIn' | 'clockOut', text: string) => {
+  /**
+   * On blur, rewrite the field's text to its normalised form. Reads the latest typed text and the
+   * committed value from the store (not this render's closure, which can be a keystroke behind),
+   * and only rewrites when the normalised text equals the committed value, so normalising can
+   * never make the field and the money disagree.
+   */
+  const normaliseClock = (field: 'clockIn' | 'clockOut') => {
+    const { draft } = useShiftStore.getState();
+    const typedNow = draft.typed[member.id];
+    const committed = draft.team.find((m) => m.id === member.id)?.[field];
+    const text = field === 'clockIn' ? typedNow?.clockInText : typedNow?.clockOutText;
+    if (text === undefined) return;
     const t = parseTimeInput(text);
-    if (t) setTyped(member.id, field === 'clockIn' ? { clockInText: t } : { clockOutText: t });
+    if (t && t === committed) {
+      setTyped(member.id, field === 'clockIn' ? { clockInText: t } : { clockOutText: t });
+    }
+  };
+  const normaliseHours = () => {
+    const { draft } = useShiftStore.getState();
+    const text = draft.typed[member.id]?.hoursText;
+    const committed = draft.team.find((m) => m.id === member.id)?.hours;
+    if (text === undefined) return;
+    const h = parseHoursInput(text);
+    if (h !== null && h === committed) setTyped(member.id, { hoursText: String(h) });
   };
 
   return (
@@ -154,10 +175,7 @@ function MemberRow({
                 setTyped(member.id, { hoursText: t });
                 updateMember(member.id, { hours: parseHoursInput(t) ?? undefined });
               }}
-              onEndEditing={() => {
-                const h = parseHoursInput(hoursText);
-                if (h !== null) setTyped(member.id, { hoursText: String(h) });
-              }}
+              onEndEditing={normaliseHours}
               placeholder="e.g. 6.5 or 6:30"
               keyboardType="decimal-pad"
               inputMode="decimal"
@@ -169,7 +187,7 @@ function MemberRow({
                   accessibilityLabel={`Clock in time for ${who}`}
                   value={clockInText}
                   onChangeText={(t) => onClock('clockIn', t)}
-                  onEndEditing={() => normaliseClock('clockIn', clockInText)}
+                  onEndEditing={() => normaliseClock('clockIn')}
                   placeholder="In 5pm"
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -180,7 +198,7 @@ function MemberRow({
                   accessibilityLabel={`Clock out time for ${who}`}
                   value={clockOutText}
                   onChangeText={(t) => onClock('clockOut', t)}
-                  onEndEditing={() => normaliseClock('clockOut', clockOutText)}
+                  onEndEditing={() => normaliseClock('clockOut')}
                   placeholder="Out 1:30am"
                   autoCapitalize="none"
                   autoCorrect={false}
