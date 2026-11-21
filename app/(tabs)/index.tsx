@@ -10,15 +10,19 @@ import {
   Field,
   Input,
   MoneyInput,
+  Muted,
   Screen,
   ToggleRow,
 } from '@/components/ui';
 import { formatShiftDate } from '@/lib/format';
+import { DEV_BUILD_MESSAGE, isOcrAvailable } from '@/ocr/recognize';
 import { selectProfile, useShiftStore } from '@/store/shiftStore';
 import { spacing } from '@/theme';
 
 export default function NewShiftScreen() {
+  const ocr = isOcrAvailable();
   const draft = useShiftStore((s) => s.draft);
+  const scanned = draft.scanned ?? [];
   const profiles = useShiftStore((s) => s.profiles);
   const profile = useShiftStore(selectProfile);
   const { setMoney, setDate, setRoundToDollar, setProfile, resetDraft } = useShiftStore.getState();
@@ -72,29 +76,35 @@ export default function NewShiftScreen() {
           label="Total tips"
           value={draft.totalTips}
           onChange={(v) => setMoney('totalTips', v)}
+          highlight={scanned.includes('totalTips')}
           hint="Card + cash tips"
         />
         <MoneyInput
           label="Net sales"
           value={draft.netSales}
           onChange={(v) => setMoney('netSales', v)}
+          highlight={scanned.includes('netSales')}
         />
         <MoneyInput
           label="Food sales"
           value={draft.foodSales}
           onChange={(v) => setMoney('foodSales', v)}
+          highlight={scanned.includes('foodSales')}
           hint="Used for the kitchen tip-out"
         />
         {foodOverNet ? (
           <Banner kind="warning">Food sales are higher than net sales — double-check.</Banner>
         ) : null}
         <Button
-          label="Scan receipt (coming soon)"
-          variant="ghost"
-          disabled
-          onPress={() => {}}
-          accessibilityHint="Receipt scanning is not available yet"
+          label="Scan receipt"
+          variant="secondary"
+          disabled={!ocr}
+          onPress={() => router.push('/scan')}
+          accessibilityHint={
+            ocr ? 'Take or choose a photo of your checkout report' : DEV_BUILD_MESSAGE
+          }
         />
+        {!ocr ? <Muted>{DEV_BUILD_MESSAGE}</Muted> : null}
       </Card>
 
       <Card>
