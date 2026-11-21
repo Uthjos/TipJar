@@ -335,3 +335,93 @@ No new owner decisions. Still open from §11: Q6 (cloud backup / accounts).
 - `npx prettier --check .`: all files formatted.
 - `npx expo export --platform android`: bundled. One Hermes bundle (`entry-….hbc`, 3 MB), exported to the scratchpad, not the repo. The app doesn't import `sql.js` or `src/db/testing`.
 - `git status`: clean. Nothing pushed.
+
+---
+
+# Round 5: milestone 5
+
+Main started at `519187b`, which added `docs/m5-contract.md`. I read it before merging. Nothing was pushed.
+
+## R5.1 Merges
+
+| Step                               | Commit    | What                                                                                                                    |
+| ---------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Merge `feat/m5-profiles` (--no-ff) | `c8b2ad7` | See the list below the table. 81 implementer tests.                                                                     |
+| Merge `test/m5-profiles` (--no-ff) | `d55a19b` | 129 acceptance tests: profiles (55), profileValidation (43), migrations-v2 (15), customProfiles (16). Findings #55–#67. |
+| Decisions                          | `37a2637` | Code changes for #58, #60, #64 and #65, `displayRole` signature fix, M4 version test, review tests, contract decisions. |
+
+\* See `git log --merges` for the exact merge hashes.
+
+`feat/m5-profiles` adds:
+
+- the `label` column (schema v2) and `migrate(db, toVersion?)`;
+- `src/lib/profiles.ts` and `src/lib/profileValidation.ts`;
+- store actions for profiles, coworkers and settings, with `checkProfile` run in the store;
+- the Settings, profile editor and onboarding screens, a chip-row profile picker, and extra bottom padding on Who worked;
+- a fix so switching to a server profile drops the auto-added "Me".
+
+After both merges, with `npm ci`:
+
+- **Tests:** 551 passed, 1 failed (552, 29 suites). The failure was the M4 test `SCHEMA_VERSION is 1 for milestone 4`, as expected (#66).
+- **Lint and Prettier:** clean.
+- **Typecheck:** 16 errors, in two groups:
+  1. 6 expo-router route-type errors (`/onboarding`, `/profile/...`). These were **environment only**: the gitignored, generated `.expo/types/router.d.ts` predated the new routes. I regenerated it with expo-router's own `regenerateDeclarations`, and the errors went away. No code change; a fresh `expo start` does the same.
+  2. 10 errors in `profiles.test.ts`, where the tests pass a full `TipOutRule` to `displayRole`. The implementation typed the parameter as `Pick<TipOutRule, 'role' | 'label'>`, which rejects the extra properties. The contract signature is `displayRole(rule: TipOutRule)`, so this was an implementation deviation. I widened the parameter to `TipOutRule | Pick<…>`.
+
+## R5.2 Triage
+
+| Failure                                            | Category                                                | Resolution                                                                                                                                                                  |
+| -------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `migrations › SCHEMA_VERSION is 1 for milestone 4` | (b) outdated test (#66, instructed)                     | Now `SCHEMA_VERSION is the current version (2 since milestone 5)`, with a comment to bump it per migration. The v1→v2 upgrade itself is covered by `migrations-v2.test.ts`. |
+| `profiles.test › displayRole › *` (typecheck only) | (a) implementation deviated from the contract signature | `displayRole` accepts a full `TipOutRule`. Jest passed before because Babel doesn't typecheck.                                                                              |
+| Stale `.expo/types/router.d.ts` (typecheck only)   | Environment                                             | Regenerated. Not a code issue.                                                                                                                                              |
+
+Totals: 1 implementation bug (the `displayRole` signature), 1 outdated test (the version test), 0 judgment calls among failures, plus 1 environment issue.
+
+I expected stub-vs-real differences for #55, #56, #57 and #59, but none caused a failure. The tester's assumptions matched the real helpers, or the tests accepted either form (kitchen naming). The real behaviour is now written into the contract.
+
+## R5.3 Findings #55–#67
+
+| #   | Finding                                  | Disposition                                      | Notes                                                                                                                                                                                                                                                                                                                       |
+| --- | ---------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 55  | `roleIdFromLabel` for unusual labels     | **Recorded in the contract**                     | Any-script letters and digits are kept. Other runs, including apostrophes, become `-`. Built-in aliases are the id, the id plus "s", and the display and singular labels. "Bar Back" becomes `bar-back`. I kept the apostrophe → `-` behaviour: the tester only suggested dropping it, and no saved data depends on it yet. |
+| 56  | "Kitchen" vs "Kitchen (KTO)"             | **Recorded in the contract**                     | `displayRole` shows "Kitchen (KTO)". `profileSummary` shows "Kitchen" (parenthetical stripped). `roleIdFromLabel('Kitchen (KTO)')` returns `'kitchen'`.                                                                                                                                                                     |
+| 57  | Out-of-range indexes                     | **Recorded in the contract**                     | Unchanged copy, no throw. `moveRule` clamps `to`; an out-of-range `from` is a no-op.                                                                                                                                                                                                                                        |
+| 58  | 0% pool                                  | **Accepted** (changed)                           | New `POOL_PERCENT_ZERO` warning. Tested. The tester's "0% has no errors" test still passes.                                                                                                                                                                                                                                 |
+| 59  | `NO_SHARE_RULE` with no rules            | **Accepted** (already implemented)               | Suppressed when `NO_RULES` fires. Tested.                                                                                                                                                                                                                                                                                   |
+| 60  | Unallocated remainder                    | **Accepted** (changed, small)                    | New engine warning `REMAINDER_UNALLOCATED` with the amount ("$104.00 of the tip-out pool has no role to share it, so it stays with you"), shown on Results through the warning banners. No result field. Tested with rounding on and off, plus the no-warning cases.                                                        |
+| 61  | `role` vs `label` as the source of truth | **Confirmed** (implementer, on your instruction) | `renameRolePatch`: the role id is fixed once the rule exists, and renames change only `label`.                                                                                                                                                                                                                              |
+| 62  | Labels on built-in roles                 | **Confirmed**                                    | A name that resolves to a built-in stores that role with no label.                                                                                                                                                                                                                                                          |
+| 63  | Infinite weights; NFC names              | **Accepted** (already implemented)               | `RULE_WEIGHT_POSITIVE` requires a finite weight. `NAME_TAKEN` compares NFC-normalised, lower-cased names. Tests added.                                                                                                                                                                                                      |
+| 64  | When onboarding shows                    | **Accepted** (changed)                           | `needsOnboarding` now also requires `status === 'ready'`, so a failed or unfinished hydrate never shows onboarding. The strict `onboarded === true` check was already in `hydrate`. Tested: loading, error, and a stored `'true'` string.                                                                                   |
+| 65  | #44 bypassed by switching `appliesTo`    | **Accepted** (changed)                           | The store's `saveProfile` refuses to change `appliesTo` on the last profile for a role (`LAST_PROFILE_FOR_ROLE`). The default fallback is the built-in first, then the first remaining by name. Tested.                                                                                                                     |
+| 66  | M4 tests breaking under M5               | **Confirmed**                                    | Version test updated. Validation runs in the store, not the repository, so the M4 repository tests are untouched.                                                                                                                                                                                                           |
+| 67  | `wholeDollarShares` default              | **Confirmed** (no change)                        | Defaults to `true`, matching the engine default.                                                                                                                                                                                                                                                                            |
+
+Counts (13 findings):
+
+- **Accepted 6:** #58, #59, #60, #63, #64, #65. Four were behaviour changes (#58, #60, #64, #65); two were already implemented (#59, #63).
+- **Confirmed 4:** #61, #62, #66, #67.
+- **Recorded in the contract 3:** #55, #56, #57.
+- **Rejected 0.**
+
+## R5.4 Doc edits
+
+- `docs/m5-contract.md`: added `POOL_PERCENT_ZERO` to the issue codes, and a "Decisions (main-branch review, round 5)" section. It records schema v2, the real helper behaviour (#55–#57), #58–#67, and the implementer's additions beyond the contract.
+- CLAUDE.md: not edited.
+
+## R5.5 Owner decisions
+
+None new. Still open from §11: Q6 (cloud backup / accounts).
+
+## R5.6 Final check output (main @ HEAD)
+
+- `npm test`: **31 suites, 565 tests passed, 0 failed**.
+  - engine project: 29 suites, 554 tests.
+  - ui project: 2 suites, 11 tests.
+  - Round 5 added 13 tests: 3 in the engine `review.test.ts`, 5 in `src/lib/__tests__/review.m5.test.ts`, and 5 in `src/store/__tests__/review.m5.test.ts`.
+- `npm run lint`: 0 errors, 0 warnings.
+- `npm run typecheck`: clean, after regenerating the gitignored typed-routes file.
+- `npx prettier --check .`: all files formatted.
+- `npx expo export --platform android`: bundled. One Hermes bundle (`entry-….hbc`, 3 MB), exported to the scratchpad.
+- `git status`: clean. Nothing pushed.
