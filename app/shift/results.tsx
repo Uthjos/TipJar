@@ -19,6 +19,7 @@ import {
   roundingParts,
 } from '@/lib/format';
 import { userEarnings, userKeptEntry } from '@/lib/earnings';
+import { formatHours } from '@/lib/hoursInput';
 import { buildShiftInput, engineOptions, selectProfile, useShiftStore } from '@/store/shiftStore';
 import { font, MIN_TAP, spacing, useColors } from '@/theme';
 
@@ -98,9 +99,7 @@ function RoleRow({
             <View key={m.memberId} style={styles.memberRow}>
               <Body style={{ flex: 1 }}>
                 {m.name}
-                {m.hours > 0 ? (
-                  <Muted> · {m.hours.toFixed(2).replace(/\.?0+$/, '')} h</Muted>
-                ) : null}
+                {m.hours > 0 ? <Muted> · {formatHours(m.hours)}</Muted> : null}
               </Body>
               <Muted style={{ marginRight: spacing.md }}>
                 {formatPercent(totalTips > 0 ? m.percentOfTips : 0)}
@@ -221,6 +220,7 @@ export default function ResultsScreen() {
                 <Body style={{ flex: 1 }}>
                   {k.name}
                   {k.memberId === mine?.memberId ? <Muted> (you)</Muted> : null}
+                  {k.hours > 0 ? <Muted> · {formatHours(k.hours)}</Muted> : null}
                 </Body>
                 <Body style={{ fontWeight: '600' }}>{formatCents(k.amount)}</Body>
               </View>

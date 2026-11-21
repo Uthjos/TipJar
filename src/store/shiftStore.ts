@@ -5,6 +5,7 @@ import * as repo from '@/db/repositories';
 import type { Coworker, SavedShift } from '@/db/repositories';
 import type { Db } from '@/db/types';
 import { DEFAULT_PROFILES } from '@/engine/profiles';
+import { copyHoursToRole as copyHours, type TypedMember } from '@/lib/hoursInput';
 import { checkProfile, hasErrors, type ProfileIssue } from '@/lib/profileValidation';
 import { builtInProfile, isBuiltInProfile, newProfile, roleNames } from '@/lib/profiles';
 import type {
@@ -30,6 +31,32 @@ export interface DraftShift {
   foodSales?: Cents;
   team: TeamMember[];
   missingRoleHandling: MissingRoleHandling;
+  /**
+   * What the user typed in each member's hours fields, by member id (M6). Members only ever hold
+   * committed values (`hours` number, `clockIn` / `clockOut` "HH:mm"); this keeps the raw text so
+   * checkTeamHours can flag problems before they're committed. Not saved with the shift.
+   */
+  typed: Record<string, TypedHours>;
+}
+
+/** Raw hours input for one member, plus which entry mode their panel shows. */
+export interface TypedHours {
+  mode?: 'hours' | 'clock';
+  hoursText?: string;
+  clockInText?: string;
+  clockOutText?: string;
+}
+
+/** The draft team merged with typed text, as `checkTeamHours` expects. */
+export function typedTeam(draft: DraftShift): TypedMember[] {
+  return draft.team.map((m) => {
+    const t = draft.typed[m.id];
+    const out: TypedMember = { ...m };
+    if (t?.hoursText !== undefined) out.hoursText = t.hoursText;
+    if (t?.clockInText !== undefined) out.clockInText = t.clockInText;
+    if (t?.clockOutText !== undefined) out.clockOutText = t.clockOutText;
+    return out;
+  });
 }
 
 let idCounter = 0;
@@ -49,6 +76,7 @@ function freshDraft(profileId = 'server-default', roundToDollar = true): DraftSh
     roundToDollar,
     team: [],
     missingRoleHandling: 'retain',
+    typed: {},
   };
 }
 
@@ -115,6 +143,10 @@ interface ShiftState {
   addMember: (role: RoleId, name?: string) => string;
   updateMember: (id: string, patch: Partial<Omit<TeamMember, 'id'>>) => void;
   removeMember: (id: string) => void;
+  /** Remember what was typed in a member's hours fields (M6), so checks see it before commit. */
+  setTyped: (id: string, patch: TypedHours) => void;
+  /** "Same for everyone in this role": copy one member's hours / clock times (M6). */
+  copyHoursToRole: (fromMemberId: string) => void;
   /**
    * Persist a shift snapshot and remember its coworkers. `team` is the draft team as typed (so
    * placeholder names like "Barback 2" aren't remembered); defaults to `input.team`.
@@ -260,7 +292,28 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
       },
     })),
   removeMember: (id) =>
-    set((s) => ({ draft: { ...s.draft, team: s.draft.team.filter((m) => m.id !== id) } })),
+    set((s) => {
+      const typed = { ...s.draft.typed };
+      delete typed[id];
+      return { draft: { ...s.draft, team: s.draft.team.filter((m) => m.id !== id), typed } };
+    }),
+  setTyped: (id, patch) =>
+    set((s) => ({
+      draft: { ...s.draft, typed: { ...s.draft.typed, [id]: { ...s.draft.typed[id], ...patch } } },
+    })),
+  copyHoursToRole: (fromId) =>
+    set((s) => {
+      const source = s.draft.team.find((m) => m.id === fromId);
+      if (!source) return {};
+      const team = copyHours(s.draft.team, fromId);
+      // The copies are committed values: drop the targets' typed text, match the source's mode.
+      const mode = s.draft.typed[fromId]?.mode ?? (source.hours !== undefined ? 'hours' : 'clock');
+      const typed = { ...s.draft.typed };
+      for (const m of team) {
+        if (m.role === source.role && m.id !== fromId) typed[m.id] = { mode };
+      }
+      return { draft: { ...s.draft, team, typed } };
+    }),
   saveShift: async (input, result, team = input.team) => {
     const db = get().db;
     if (!db) {
