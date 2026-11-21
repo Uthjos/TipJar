@@ -41,31 +41,44 @@ type PosId = 'toast' | 'square' | 'aloha' | 'generic';
 type FieldId = 'totalTips' | 'netSales' | 'foodSales';
 type Confidence = 'high' | 'medium' | 'low';
 
-interface OcrLine { text: string; top?: number; left?: number; height?: number } // px, optional
+interface OcrLine {
+  text: string;
+  top?: number;
+  left?: number;
+  height?: number;
+} // px, optional
 interface FoundField {
   cents: Cents;
   confidence: Confidence;
-  source: string;           // the receipt line(s) it came from, trimmed, for the Confirm screen
+  source: string; // the receipt line(s) it came from, trimmed, for the Confirm screen
   how: 'label' | 'card+cash' | 'card-only' | 'cash-only';
 }
 interface ReceiptParse {
   pos: PosId;
   fields: Partial<Record<FieldId, FoundField>>;
-  missing: FieldId[];       // fields not found, in FieldId order
-  notes: string[];          // plain-English hints, e.g. "Found card and cash tips and added them."
+  missing: FieldId[]; // fields not found, in FieldId order
+  notes: string[]; // plain-English hints, e.g. "Found card and cash tips and added them."
 }
 ```
 
 ```ts
 // src/ocr/labels.ts — the config map (data only)
-export const LABELS: Record<PosId, {
-  detect: string[];                                   // keywords that identify the POS (case-insensitive)
-  totalTips: string[]; cardTips: string[]; cashTips: string[];
-  netSales: string[]; foodSales: string[];
-  ignore: string[];                                   // labels that look similar but must NOT match
-}>;
+export const LABELS: Record<
+  PosId,
+  {
+    detect: string[]; // keywords that identify the POS (case-insensitive)
+    totalTips: string[];
+    cardTips: string[];
+    cashTips: string[];
+    netSales: string[];
+    foodSales: string[];
+    ignore: string[]; // labels that look similar but must NOT match
+  }
+>;
 ```
+
 Generic synonyms at minimum (each POS adds its own on top of generic):
+
 - totalTips: `total tips`, `tips total`, `tip total`, `total gratuity`, `tips`, `gratuity`
 - cardTips: `credit card tips`, `cc tips`, `card tips`, `charged tips`, `non-cash tips`,
   `tips (credit)`, `credit tips`
@@ -80,6 +93,7 @@ Generic synonyms at minimum (each POS adds its own on top of generic):
 // src/ocr/money.ts
 parseMoneyToken(token: string): Cents | null
 ```
+
 - Accepts `$1,234.56`, `1234.56`, `1,234.56`, `$0.50`, `.50`, `12`, `(12.34)` and `-12.34`
   (negative → returned as negative cents; callers reject negatives for these fields), `12.3` → 1230.
 - OCR fixes inside a token that otherwise looks numeric: `O`/`o` → 0, `l`/`I`/`|` → 1, `S` → 5,
@@ -92,7 +106,9 @@ parseMoneyToken(token: string): Cents | null
 detectPos(lines: OcrLine[]): PosId
 parseReceipt(input: string | OcrLine[], opts?: { pos?: PosId }): ReceiptParse
 ```
+
 Rules:
+
 1. A string input is split on line breaks; blank lines dropped; text normalised (collapse
    whitespace, NFC, strip `:`/`.` leaders like `Net Sales.......$1,560.25`).
 2. **Label match:** case-insensitive, whole words, against the POS's synonyms plus generic; the

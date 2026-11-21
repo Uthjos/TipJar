@@ -41,6 +41,8 @@ export interface DraftShift {
   editingShiftId?: string;
   /** M7 (#54): shown on Results when the saved shift's profile was deleted. */
   editingNote?: string;
+  /** M8: money fields filled from a scanned receipt and not edited since (highlighted). */
+  scanned?: ('totalTips' | 'netSales' | 'foodSales')[];
 }
 
 /** Raw hours input for one member, plus which entry mode their panel shows. */
@@ -143,6 +145,8 @@ interface ShiftState {
   hydrate: (db: Db) => Promise<void>;
   setLoadError: (message: string) => void;
   setMoney: (field: 'totalTips' | 'netSales' | 'foodSales', value: Cents | undefined) => void;
+  /** M8: fill New Shift from a confirmed receipt scan; those fields are highlighted until edited. */
+  applyScan: (values: Partial<Record<'totalTips' | 'netSales' | 'foodSales', Cents>>) => void;
   setDate: (date: string) => void;
   setRoundToDollar: (on: boolean) => void;
   setProfile: (profileId: string) => void;
@@ -262,7 +266,28 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
   },
   setLoadError: (message) => set({ status: 'error', loadError: message }),
 
-  setMoney: (field, value) => set((s) => ({ draft: { ...s.draft, [field]: value } })),
+  setMoney: (field, value) =>
+    set((s) => ({
+      draft: {
+        ...s.draft,
+        [field]: value,
+        // Editing a scanned value ends its highlight.
+        ...(s.draft.scanned ? { scanned: s.draft.scanned.filter((f) => f !== field) } : {}),
+      },
+    })),
+  applyScan: (values) =>
+    set((s) => {
+      const draft = { ...s.draft };
+      const scanned: ('totalTips' | 'netSales' | 'foodSales')[] = [];
+      for (const f of ['totalTips', 'netSales', 'foodSales'] as const) {
+        const v = values[f];
+        if (v !== undefined) {
+          draft[f] = v;
+          scanned.push(f);
+        }
+      }
+      return { draft: { ...draft, scanned } };
+    }),
   setDate: (date) => set((s) => ({ draft: { ...s.draft, date } })),
   setRoundToDollar: (on) => {
     // Editing a saved shift changes that shift only, not the default.

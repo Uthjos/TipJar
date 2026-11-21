@@ -157,11 +157,14 @@ export function MoneyInput({
   value,
   onChange,
   hint,
+  highlight,
 }: {
   label: string;
   value: Cents | undefined;
   onChange: (c: Cents | undefined) => void;
   hint?: string;
+  /** M8: filled from a scanned receipt and not edited since; shown with an accent outline. */
+  highlight?: boolean;
 }) {
   const c = useColors();
   const [text, setText] = useState(value === undefined ? '' : centsToInputString(value));
@@ -175,11 +178,18 @@ export function MoneyInput({
   }
   const invalid = text.trim() !== '' && parseMoneyToCents(text) === undefined;
   return (
-    <Field label={label} hint={invalid ? 'Enter an amount like 123.45' : hint}>
+    <Field
+      label={highlight ? `${label} · from receipt` : label}
+      hint={invalid ? 'Enter an amount like 123.45' : hint}
+    >
       <View
         style={[
           styles.moneyRow,
-          { backgroundColor: c.surfaceAlt, borderColor: invalid ? c.danger : c.border },
+          {
+            backgroundColor: highlight ? c.accent : c.surfaceAlt,
+            borderColor: invalid ? c.danger : highlight ? c.primary : c.border,
+            borderWidth: highlight ? 2 : 1,
+          },
         ]}
       >
         <Text style={[styles.moneyPrefix, { color: c.textMuted }]}>$</Text>
