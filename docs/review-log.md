@@ -350,8 +350,6 @@ Main started at `519187b`, which added `docs/m5-contract.md`. I read it before m
 | Merge `test/m5-profiles` (--no-ff) | `d55a19b` | 129 acceptance tests: profiles (55), profileValidation (43), migrations-v2 (15), customProfiles (16). Findings #55–#67. |
 | Decisions                          | `37a2637` | Code changes for #58, #60, #64 and #65, `displayRole` signature fix, M4 version test, review tests, contract decisions. |
 
-\* See `git log --merges` for the exact merge hashes.
-
 `feat/m5-profiles` adds:
 
 - the `label` column (schema v2) and `migrate(db, toVersion?)`;
