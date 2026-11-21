@@ -33,6 +33,7 @@ interface Candidate {
   confidence: Confidence;
   source: string;
   exact: boolean;
+  synonym: string;
   index: number;
 }
 
@@ -123,6 +124,20 @@ function synonyms(pos: PosId, field: LabelField): string[] {
   return [...new Set(all)];
 }
 
+/** Synonyms that only count when they are the whole label on the line (#94). */
+const WHOLE_LABEL_ONLY: ReadonlySet<string> = new Set(['tips']);
+
+/** The line's text without its money tokens, lower-cased: "Tips $123.45" -> "tips". */
+function labelPart(text: string): string {
+  return text
+    .split(' ')
+    .filter((w) => !parseMoneyTokenDetailed(w.replace(/[^\d)]+$/, '')))
+    .join(' ')
+    .replace(/[\s:.$-]+$/, '')
+    .trim()
+    .toLowerCase();
+}
+
 function isExact(pos: PosId, field: LabelField, synonym: string): boolean {
   return (
     EXACT[field].includes(synonym) ||
@@ -155,6 +170,9 @@ function amountFor(
       if (t.length > 0) return { ...t[0]!, sameLine: false, source: `${line.text} ${l.text}` };
     }
   }
+
+  // With coordinates, only a value on the same row counts (no next-line guess).
+  if (line.top !== undefined && line.height !== undefined) return null;
 
   const next = lines[line.index + 1];
   if (next && !isLabelLine(next)) {
@@ -196,6 +214,8 @@ export function parseReceipt(input: string | OcrLine[], opts: { pos?: PosId } = 
     let best: { field: LabelField; synonym: string; end: number } | null = null;
     for (const field of LABEL_FIELDS) {
       for (const s of syn[field]) {
+        // #94: bare "tips" only when it's the whole label on the line, not in a header.
+        if (WHOLE_LABEL_ONLY.has(s) && labelPart(l.text) !== s) continue;
         const end = matchEnd(lower, s);
         if (end >= 0 && (!best || s.length > best.synonym.length)) {
           best = { field, synonym: s, end };
@@ -235,6 +255,7 @@ export function parseReceipt(input: string | OcrLine[], opts: { pos?: PosId } = 
         confidence,
         source: amount.source,
         exact,
+        synonym: label.synonym,
         index: line.index,
       });
       continue;
@@ -242,10 +263,9 @@ export function parseReceipt(input: string | OcrLine[], opts: { pos?: PosId } = 
     // Food sales by the sales-by-category rule: a line that is just "Food" + amount.
     const food = /^food\b(.*)$/i.exec(line.text);
     if (food && inCategorySection) {
-      const tokens = moneyTokens(line.text, 4);
-      const rest = food[1]!.replace(/[\s$()\-.,\dOolI|SB%]/g, '');
-      if (tokens.length > 0 && rest === '') {
-        const t = tokens[tokens.length - 1]!;
+      // The amount may be on the line, or positional / next line (two-column layouts).
+      const t = labelPart(line.text) === 'food' ? amountFor(lines, line, 4, isLabelLine) : null;
+      if (t) {
         if (t.cents < 0) {
           negatives.add('foodSales');
           continue;
@@ -253,8 +273,9 @@ export function parseReceipt(input: string | OcrLine[], opts: { pos?: PosId } = 
         candidates.foodSales.push({
           cents: t.cents,
           confidence: t.fixed ? 'low' : 'medium',
-          source: line.text,
+          source: t.source,
           exact: false,
+          synonym: 'food',
           index: line.index,
         });
       }
@@ -277,7 +298,13 @@ export function parseReceipt(input: string | OcrLine[], opts: { pos?: PosId } = 
   const fields: Partial<Record<FieldId, FoundField>> = {};
 
   const total = pick('totalTips');
-  if (total) {
+  // #98: a loose total (bare "Tips") can be tips after tip-out; prefer card + cash when both exist.
+  const preferCardCash =
+    !!total &&
+    (!total.exact || total.synonym === 'tips') &&
+    candidates.cardTips.length > 0 &&
+    candidates.cashTips.length > 0;
+  if (total && !preferCardCash) {
     fields.totalTips = {
       cents: total.cents,
       confidence: total.confidence,

@@ -21,10 +21,12 @@ export interface PosLabels {
 export const LABELS: Record<PosId, PosLabels> = {
   generic: {
     detect: [],
-    totalTips: ['total tips', 'tips total', 'tip total', 'total gratuity', 'tips', 'gratuity'],
+    // 'tips' only counts when it is the whole label on the line, e.g. "Tips $123.45" (#94).
+    totalTips: ['total tips', 'tips total', 'tip total', 'total gratuity', 'tips'],
     cardTips: [
       'credit card tips',
       'cc tips',
+      'charge tips',
       'card tips',
       'charged tips',
       'non-cash tips',
@@ -48,6 +50,15 @@ export const LABELS: Record<PosId, PosLabels> = {
       'net sales tax',
       'refund',
       'void',
+      // #94 / #98: tips after tip-out or pooled, not what the server collected.
+      'net tips',
+      'tips paid',
+      'tips due',
+      'tip pool',
+      // #97: service charges / auto-gratuity are not tips in v1.
+      'service charge',
+      'auto gratuity',
+      'auto-grat',
     ],
   },
   toast: {
@@ -61,7 +72,7 @@ export const LABELS: Record<PosId, PosLabels> = {
   },
   square: {
     detect: ['square', 'squareup', 'square pos', 'square, inc'],
-    totalTips: ['total tips', 'tips'],
+    totalTips: ['total tips'],
     cardTips: ['card tips', 'card tip'],
     cashTips: ['cash tips', 'cash tip'],
     netSales: ['net sales'],
@@ -88,9 +99,17 @@ export const EXACT: Record<
   'totalTips' | 'cardTips' | 'cashTips' | 'netSales' | 'foodSales',
   string[]
 > = {
-  totalTips: ['total tips', 'tips total', 'tip total'],
-  cardTips: ['credit card tips', 'cc tips', 'card tips', 'credit tips', 'tips (credit)'],
+  // 'tips' is exact only as the whole label on a line (it can't match otherwise, #94).
+  totalTips: ['total tips', 'tips total', 'tip total', 'tips'],
+  cardTips: [
+    'credit card tips',
+    'cc tips',
+    'card tips',
+    'charge tips',
+    'credit tips',
+    'tips (credit)',
+  ],
   cashTips: ['cash tips', 'declared cash tips'],
   netSales: ['net sales', 'net sales total', 'total net sales'],
-  foodSales: ['food sales', 'food total'],
+  foodSales: ['food sales', 'food total', 'kitchen sales'],
 };

@@ -50,11 +50,9 @@ export function parseMoneyTokenDetailed(token: string): { cents: Cents; fixed: b
     t = t.replace(/[OolI|SB]/g, (ch) => OCR_DIGITS[ch]!);
     fixed = true;
   }
-  // A space between digits ("1 234.56", "12 .50" is not allowed).
-  if (/\s/.test(t)) {
-    if (!/^\d+(\s\d+)*([.,]\d+)?$/.test(t)) return null;
-    t = t.replace(/\s+/g, '');
-  }
+  // A space between digits is an OCR split ("1 234.56", "$1,56 0.25"); any other space -> null.
+  t = t.replace(/(\d)\s+(?=\d)/g, '$1');
+  if (/\s/.test(t)) return null;
 
   let whole: string;
   let frac = '';

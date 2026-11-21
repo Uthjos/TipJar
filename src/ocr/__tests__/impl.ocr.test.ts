@@ -144,4 +144,36 @@ describe('parseReceipt', () => {
     expect(detectPos([{ text: 'My Diner' }])).toBe('generic');
     expect(Object.keys(LABELS)).toEqual(['generic', 'toast', 'square', 'aloha']);
   });
+
+  it('review decisions #94-#103', () => {
+    const r = (...lines: string[]) => parseReceipt(lines.join('\n'));
+    // #94: bare "Tips" counts only as the whole label; headers and "gratuity" don't.
+    expect(r('Tips $123.45').fields.totalTips).toEqual(
+      expect.objectContaining({ cents: 12345, how: 'label', confidence: 'high' }),
+    );
+    expect(r('Tips and gratuity report 2026', 'Net Sales 100').fields.totalTips).toBeUndefined();
+    expect(r('Gratuity 15.00').fields.totalTips).toBeUndefined();
+    // #96: a "TIPS" header doesn't take the next label line's amount.
+    expect(r('TIPS', 'Credit Card Tips 120.00', 'Cash Tips 20.00').fields.totalTips).toEqual(
+      expect.objectContaining({ cents: 14000, how: 'card+cash' }),
+    );
+    // #97 / #98 / #103: service charges, net tips and tips owed are ignored for every field.
+    const ignored = r(
+      'Service Charge 25.00',
+      'Auto Gratuity 18.00',
+      'Net Tips 80.00',
+      'Tips Owed 30.00',
+      'Net Sales 500.00',
+    );
+    expect(ignored.fields.totalTips).toBeUndefined();
+    expect(ignored.fields.netSales!.cents).toBe(50000);
+    // #98: card + cash preferred over a bare "Tips" line.
+    expect(r('Tips 80.00', 'Card Tips 90.00', 'Cash Tips 20.00').fields.totalTips).toEqual(
+      expect.objectContaining({ cents: 11000, how: 'card+cash' }),
+    );
+    // #95: Aloha / generic "charge tips".
+    expect(r('Charge Tips 50.00', 'Declared Tips 5.00').fields.totalTips!.cents).toBe(5500);
+    // #101: the lowest confidence wins (OCR-fixed card tips inside card + cash).
+    expect(r('Card Tips 5O.00', 'Cash Tips 5.00').fields.totalTips!.confidence).toBe('low');
+  });
 });
