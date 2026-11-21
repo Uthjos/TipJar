@@ -32,15 +32,11 @@ describe('labels config (data only)', () => {
     const g = LABELS.generic;
     const lower = (xs: string[]) => xs.map((x) => x.toLowerCase());
     expect(lower(g.totalTips)).toEqual(
-      expect.arrayContaining([
-        'total tips',
-        'tips total',
-        'tip total',
-        'total gratuity',
-        'tips',
-        'gratuity',
-      ]),
+      expect.arrayContaining(['total tips', 'tips total', 'tip total', 'total gratuity', 'tips']),
     );
+    // Review round 8 (#94): a bare "gratuity" label was dropped from totalTips. On real reports it
+    // mostly labels auto-gratuity / service-charge lines (ignored per #97), not tips collected.
+    expect(lower(g.totalTips)).not.toContain('gratuity');
     expect(lower(g.cardTips)).toEqual(
       expect.arrayContaining([
         'credit card tips',

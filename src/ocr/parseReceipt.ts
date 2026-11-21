@@ -50,6 +50,26 @@ function normalise(text: string): string {
     .trim();
 }
 
+/** Number of different people named in "Server:" / "Employee:" / "Team member:" header lines. */
+function distinctPeople(input: string | OcrLine[]): number {
+  try {
+    const texts =
+      typeof input === 'string'
+        ? input.split(/\r\n|\r|\n/)
+        : Array.isArray(input)
+          ? input.map((l) => (l && typeof l.text === 'string' ? l.text : ''))
+          : [];
+    const names = new Set<string>();
+    for (const t of texts) {
+      const m = /^\s*(?:server|employee|team member)\s*[:#]\s*(.+)$/i.exec(t);
+      if (m) names.add(m[1]!.trim().replace(/\s+/g, ' ').toLowerCase());
+    }
+    return names.size;
+  } catch {
+    return 0;
+  }
+}
+
 function toLines(input: string | OcrLine[]): Line[] {
   const raw: OcrLine[] =
     typeof input === 'string'
@@ -361,6 +381,12 @@ export function parseReceipt(input: string | OcrLine[], opts: { pos?: PosId } = 
   }
   if (net !== undefined && fields.totalTips && fields.totalTips.cents > net) {
     notes.push('Tips are higher than net sales — check them.');
+  }
+  // #100: a report with "Server:" / "Employee:" / "Team member:" headers for more than one person
+  // is probably for several people (or the whole store). Values are kept; the user is asked to
+  // check. Read from the raw text, since normalise() strips the colon.
+  if (distinctPeople(input) > 1) {
+    notes.push('This looks like a report for more than one person — scan your own checkout.');
   }
 
   return {

@@ -140,3 +140,65 @@ Rules:
   found), and the source line in small text; notes listed; **Use these numbers** / **Cancel**.
   Fields filled from a scan are highlighted on New Shift until edited.
 - In Expo Go (no OCR module): the button shows the dev-build message and the app keeps working.
+
+## Decisions (main-branch review, round 8)
+
+Recorded by the Maintainer when merging `feat/m8-scan` and `test/m8-scan`. Numbers refer to
+docs/test-findings.md. Details are in docs/review-log.md.
+
+### Libraries and build
+
+- **OCR library:** `@infinitered/react-native-mlkit-text-recognition` 5.0.1, an Expo Modules API package that works with the New Architecture. The preferred `@react-native-ml-kit/text-recognition` is old-architecture only.
+- **Capture:** `expo-image-picker`. The app also adds `expo-dev-client`.
+- **Native config:**
+  - `app.json` carries the plugin and the permission strings.
+  - The app id is `com.tipjar.app` on both platforms (`android.package` / `ios.bundleIdentifier`).
+  - The npm `android` / `ios` scripts are now `expo run:*`.
+- **Expo Go:**
+  - `src/ocr/recognize.ts` checks for the native module with `requireOptionalNativeModule('RNMLKitTextRecognition')`.
+  - It `require`s the package lazily, inside `recognizeImage`, and only after that check passes.
+  - Nothing imports the native package when a module loads. `isOcrAvailable()` returns `false` in Expo Go, and the Scan button shows "Scanning needs the TipJar development build."
+  - A test makes requiring the package throw, as it would in Expo Go, and checks that `recognize.ts` still imports and reports OCR as unavailable.
+
+### Labels and matching
+
+- **#94 — tips labels:**
+  - Bare `tips` counts as total tips only when it is the **whole label** on the line ("Tips $340.56").
+  - Bare `gratuity` is no longer a total-tips synonym.
+  - `net tips`, `tips paid`, `tips due` and `tip pool` are ignored.
+- **#95:** `charge tips` is a card-tips synonym, for Aloha and generic. Aloha also has `charged tips` and `total charge tips`.
+- **#96:** the next-line fallback skips a next line that is itself a label line or an ignore line.
+- **#97:** `service charge`, `auto gratuity` and `auto-grat` lines are ignored. They don't count as tips in v1, and the user can add them on the Confirm screen.
+- **#98:** card + cash beats a whole-line bare "Tips" total. Tips shown after tip-outs ("Net Tips", "Tips Owed", "Tip Share") are ignored.
+- **#101:** confidences combine to the **lowest** that applies. Examples:
+  - an OCR-fixed token is low;
+  - card + cash is the lowest of its parts and `high`.
+- **#102:** exactness is data: the `EXACT` map in `src/ocr/labels.ts`, plus every POS-specific synonym. Everything else, such as `sales (net)` and the category `Food` rule, is loose.
+- **#103:** a line matching **any** ignore label is skipped for **every** field.
+
+### Implementer's choices (accepted)
+
+1. A whole-line "Tips $x" is exact and high, but card + cash still wins (#98).
+2. With coordinates, only a same-row value counts. There is no next-line fallback (#105).
+3. `kitchen sales` is an exact food-sales label.
+4. A category `Food` line takes its value from the same row or the next line, at medium confidence.
+
+### Notes
+
+- **#106:** `notes` is empty on a clean receipt. Card + cash, card-only, cash-only, negatives, disagreeing duplicates and the sanity checks each add a note.
+- **#100:** when the raw text has `Server:` / `Employee:` / `Team member:` headers naming **more than one different person**, the parser adds a note: "This looks like a report for more than one person — scan your own checkout." The values are still filled, using the last occurrence. Repeating the same person's header, as on a multi-page report, doesn't trigger it.
+
+### Recorded, not built
+
+- **#93 — fixtures are hand-written:** the 13 fixtures were written from typical layouts. When the owner supplies photos, run them through ML Kit and add the raw text and expected values as new fixtures. Keep the current fixtures as regression tests.
+- **#99 — food category names:**
+  - A mapping setting for food categories ("Entrees", "Kitchen" → food sales) is a follow-up and is not built.
+  - Current behaviour: once a line containing `categor`, `sales by` or `revenue center` has been seen, a line that is exactly `Food` + amount anywhere **after it** counts as food sales, at medium confidence. The section never ends.
+  - Item names containing "food" don't match, because the line must be exactly "Food".
+  - The fixtures always put the category header directly above the list. Bounding the section (for example, stop at the next header or a tips section, or after about 15 lines) is part of the follow-up.
+- **#104 — money tokens:**
+  - European `1.234,56`, three-decimal amounts and `%` values are out of scope.
+  - Tokens with no digit are rejected.
+  - Line splitting doesn't join "1 234.56".
+  - Stripping `:` can split `5:02`. It doesn't affect the money fields in the fixtures.
+- **#105 — confirmed:** with coordinates, a value more than half a line-height away is not used, and there is no fallback.
