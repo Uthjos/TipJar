@@ -155,7 +155,8 @@ function memberState(m: TypedMember): MemberState {
           issues: [
             issue(
               'INVALID_HOURS',
-              `${name}'s hours should be a number like 6.5 (more than 0, up to 24).`,
+              // Review round 6 (#72): 0 hours stays invalid; say what to do instead.
+              `${name}'s hours should be a number like 6.5, up to 24. Enter hours above 0, or remove them from the team.`,
             ),
           ],
         }
@@ -225,7 +226,8 @@ export function checkTeamHours(team: TypedMember[], rolesThatSplit: RoleId[]): H
           severity: 'warning',
           memberId: m.id,
           role,
-          message: `${m.name.trim() || 'Someone'} worked ${formatHours(s.hours)} — double-check that.`,
+          // Review round 6 (#74): a gentle, warning-only nudge above 16 h.
+          message: `That's a long shift for ${m.name.trim() || 'someone'} (${formatHours(s.hours)}) — double-check the times.`,
         });
       }
     });

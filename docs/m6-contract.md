@@ -122,3 +122,54 @@ other roles untouched; inputs never mutated; unknown id → unchanged copy.
 - Results member rows already show hours; also show them on the bar's split rows (bartender flow).
   Share text adds `(6.5 h)` after a name when that member has hours.
 - Saved shifts keep whatever hours / `HH:mm` times were committed (snapshot, already JSON).
+
+## Decisions (main-branch review, round 6)
+
+Recorded by the Maintainer when merging `feat/m6-hours` and `test/m6-hours`. Numbers refer to
+docs/test-findings.md. Details are in docs/review-log.md.
+
+### Engine (#78)
+
+`calculateShift` now resolves and validates hours only for roles whose amount is split across
+members:
+
+- the profile's roles, except never-missing roles such as `kitchen`, which is paid as a whole;
+- `bartender` in the bartender flow, for the kept split.
+
+Members of any other role (kitchen, or a role the profile doesn't tip out) are never read, so bad
+clock values there can't throw. This makes the guarantee above hold: anything `checkTeamHours`
+calls error-free, with `rolesThatSplit` excluding kitchen, never makes `calculateShift` throw
+`PARTIAL_HOURS` or `INVALID_CLOCK`. The tester's property now also generates kitchen members.
+
+### Parsing
+
+- **#68 (contract kept):**
+  - With a suffix, the hour must be 1–12, so `0pm`, `0am`, `00:00pm` and `0:30am` are null.
+  - A bare `1200` is `HHmm` and means noon. `1730pm` is null.
+  - The hint "e.g. 5pm, 17:00, 1730" shows the 24h reading.
+- **#69:** all whitespace is stripped before parsing, in both time and hours input. So `5 : 30` becomes `05:30`, `17 30` becomes `17:30`, and `6 h 30 m` becomes 6.5.
+- **#70:** minutes need two digits. `5:3`, `5.3` and `5.5` are not times; they get the `INVALID_TIME` hint. `5:30:00` is null too.
+- **#73:** the 0 < h ≤ 24 range is checked **after** rounding to 2 decimals. `0.001` is rejected.
+- **#80:** `clockHours` accepts only strict `HH:mm`. Run the input through `parseTimeInput` first.
+
+### `checkTeamHours`
+
+- **#71:** `PARTIAL_HOURS` fires only when another member of the role has **valid** hours. That is the contract, and it is kept.
+- **#72:** `0` hours stays invalid (`INVALID_HOURS`). The message ends with "Enter hours above 0, or remove them from the team."
+- **#74:** `LONG_SHIFT` fires above 16 h. It is a warning only, with a gentle message: "That's a long shift for Allen (17 h) — double-check the times." Exactly 16 h doesn't warn.
+- **#75:** typed text that is present but blank means "cleared", with no fallback to that field's committed value.
+- **#76:** total hours win over clock times, matching the engine. When there is non-blank hours text, or committed `hours` with no hours text, the clock fields are ignored.
+- **#77:** each unreadable field gets its own `INVALID_TIME` (clock-in first). A member with two bad fields gets two issues.
+
+### Store (#79)
+
+The store's `copyHoursToRole` copies the source's committed values to the others in the same
+role. It also replaces their typed text with just the source's panel mode, so stale text can't
+override the copied value. Members of other roles are untouched.
+
+### Implementer interpretations accepted
+
+- `PARTIAL_HOURS` only counts valid hours (#71).
+- Committed 0 hours is `INVALID_HOURS` (#72).
+- Hours text is normalised on blur, like clock text.
+- "Same for everyone" switches the other members' panel to the source's mode.

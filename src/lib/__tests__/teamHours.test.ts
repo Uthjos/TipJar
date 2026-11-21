@@ -363,7 +363,9 @@ const caseArb = fc.record({
   flow: fc.constantFrom('server' as const, 'bartender' as const),
   roles: fc.array(
     fc.record({
-      role: fc.constantFrom('bartender', 'barback', 'host'),
+      // Review round 6 (#78): kitchen members are included too. Kitchen is never split, so the
+      // store leaves it out of rolesThatSplit and the engine must not validate its hours.
+      role: fc.constantFrom('bartender', 'barback', 'host', 'kitchen'),
       entry: entryArb,
     }),
     { minLength: 0, maxLength: 7 },

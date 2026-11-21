@@ -261,8 +261,14 @@ export function calculateShift(
   }
 
   // Resolve hours for every role we will split (validates PARTIAL_HOURS / INVALID_CLOCK up front).
+  // Only roles whose amount is actually split across members: profile roles except the
+  // never-missing ones (kitchen is paid as a whole), plus the bartenders sharing kept tips.
+  // Members of other roles are never split, so their hours are never read or validated
+  // (review round 6, #78).
   const groupHours = new Map<RoleId, { weights: number[]; hours: number[] }>();
-  const rolesNeedingHours = new Set<RoleId>(profile.rules.map((r) => r.role));
+  const rolesNeedingHours = new Set<RoleId>(
+    profile.rules.map((r) => r.role).filter((role) => !NEVER_MISSING_ROLES.has(role)),
+  );
   if (input.userRole === 'bartender') rolesNeedingHours.add('bartender');
   for (const role of rolesNeedingHours) {
     const members = membersOf(role);
