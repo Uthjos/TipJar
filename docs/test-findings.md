@@ -16,6 +16,8 @@ Author: Agent 2 (Tester), branch `test/engine`; updated on `test/owner-decisions
 
 They were run against throwaway stubs outside the repo (not committed). New findings start at **#55**.
 
+**Update (test/m6-hours):** milestone 6 acceptance tests against `docs/m6-contract.md`: `src/lib/__tests__/hoursInput.test.ts` and `src/lib/__tests__/teamHours.test.ts`, with helpers in `src/test-support/hoursFixtures.ts`. They were run against a throwaway stub outside the repo (not committed). New findings start at **#68**.
+
 The suite lives in `src/engine/__tests__/` (`money`, `hours`, `calculate`, `golden`, `properties`). Builders are in `src/test-support/builders.ts`. Every expected value is worked out by hand in a comment next to the assertion. Before committing, the suite was type-checked and run against a throwaway reference stub outside the repo: 147 tests passed, and the files compile under `strict` + `noUncheckedIndexedAccess` + `noUnusedLocals`. The stub was written from the same reading of the spec, so this proves the tests agree with each other. It does not prove they match the real implementation.
 
 Each item below gives **what**, **why**, a **proposed resolution**, and the **affected tests** (`file › describe › it`, abbreviated).
@@ -537,6 +539,85 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 
 ---
 
+## H. Milestone 6 hours (test/m6-hours)
+
+### 68. 12-hour edge forms and `1200`
+
+- **What:** The contract's rule "with a suffix the hour must be 1–12" makes `0pm`, `0am` and `00:00pm` invalid (null), while `12:00pm` → `12:00` and `12:00am` → `00:00`. A bare `1200` is read as `HHmm` → `12:00` (noon), and `1730pm` is null.
+- **Why:** These are the forms users are most likely to get "wrong": `0:30am` for just after midnight, or `1200` meaning midnight.
+- **Resolution:** The tests encode the contract as written. The hint text "e.g. 5pm, 17:00, 1730" should make the 24h reading of `1200` clear. Consider accepting `0:30am` as `00:30`, since it's unambiguous.
+- **Tests:** `hoursInput › parseTimeInput › accepted forms` (`1200`, `12:00pm`, `12:00am`, `1200am`, `1200pm`) and `› rejections` (`0pm`, `0am`, `00:00pm`, `1730pm`).
+
+### 69. What "space-insensitive" covers
+
+- **What:** The tests assume leading and trailing spaces, and spaces between the number and the suffix (`5   pm`, `9 A.M.`, `12:30 A`), are all ignored. The contract doesn't say whether spaces _inside_ the number are allowed (`5 : 30`, `17 30`).
+- **Resolution:** Strip all whitespace before parsing, so `17 30` → `17:30`. Not tested either way.
+
+### 70. One-digit minutes and decimal-looking clock times
+
+- **What:** `H:mm` and `H.mm` need two minute digits. So `5:3`, `5.3` and `5.5` are rejected, but someone typing `5.5` in a clock field might mean 5:30. `5:30:00` (with seconds) is assumed rejected.
+- **Resolution:** Keep rejecting, and show the INVALID_TIME hint. `5:30:00` → null is tested; the one-digit-minute forms aren't.
+
+### 71. Does a role's PARTIAL_HOURS count members whose hours have errors?
+
+- **What:** The contract reports PARTIAL_HOURS only when another member of the role has **valid** hours. If the only member with hours has an error, the rest of the role gets nothing. Then the moment that error is fixed, every other member gets PARTIAL_HOURS. The list of problems changes one fix at a time.
+- **Resolution:** The tests encode the contract. An alternative is to treat "entered but invalid" as enough to trigger PARTIAL_HOURS for the others, so the user sees every problem at once.
+- **Tests:** `teamHours › PARTIAL_HOURS › is not emitted when nobody in the role has valid hours`, `… › is not emitted for a member with an error of their own`.
+
+### 72. Zero hours
+
+- **What:** `parseHoursInput` rejects `0`, but the engine accepts `hours: 0`: that member gets $0, and a role where everyone has 0 hours splits equally (review #7). Someone who clocked in and left right away can't be recorded with 0 hours.
+- **Resolution:** Keep rejecting 0 (the user should remove the member instead), and make the INVALID_HOURS message say so. Otherwise, allow 0 and rely on the ZERO_SHARE note. Owner or maintainer to decide.
+- **Tests:** `hoursInput › parseHoursInput › "0" -> null …`, `teamHours › … INVALID_HOURS for hours text "0"`.
+
+### 73. Check the range before or after rounding to 2 decimals?
+
+- **What:** The contract doesn't say whether "> 0 and ≤ 24" is checked before or after rounding. The tests assume **after**, so `0.001` rounds to 0 and is rejected. By the same rule, `24.004` would round to 24 and be accepted; that case isn't tested.
+- **Tests:** `hoursInput › parseHoursInput › results always have at most 2 decimals` (asserts the result is > 0).
+
+### 74. LONG_SHIFT at 16 hours
+
+- **What:** A bartender's double (11am–3am) is exactly 16h, which doesn't warn because the threshold is > 16. An hour longer does warn. The warning doesn't block, so the only cost is noise. Total hours > 24 can't be entered at all (INVALID_HOURS).
+- **Resolution:** Keep it as a warning. Consider 18h, or wording like "Long shift — double-check the times" rather than implying an error.
+- **Tests:** `teamHours › no issues › 16h exactly is not a long shift`, `› LONG_SHIFT is a warning only`.
+
+### 75. Blank typed text clears a value
+
+- **What:** "Works on what the user typed (when present)" doesn't say what a present but **blank** field (`''` or spaces) means.
+- **Resolution:** The tests assume blank text means "cleared": no hours, and no fall-back to the committed value. `commitTeamHours` in `src/test-support/hoursFixtures.ts` follows the same rule.
+- **Tests:** `teamHours › PARTIAL_HOURS › blank text counts as no hours`, and the key property.
+
+### 76. Hours text and clock text on the same member
+
+- **What:** The UI is either/or, but nothing stops a draft from holding both an hours text and clock texts, or a committed `hours` plus typed clock times. The contract doesn't say which one is checked. Combinations like this are also the only way to get an error and a LONG_SHIFT warning on the same member, which is the only case where the "within a member, errors first" ordering rule matters.
+- **Resolution:** Total hours win, matching the engine (`hours` beats clock times). Switching the panel between modes should clear the other mode's fields. Not tested.
+
+### 77. Several problems on one member
+
+- **What:** "One issue per member problem" doesn't say whether two unreadable times (clock-in and clock-out) give one INVALID_TIME or two.
+- **Resolution:** One INVALID_TIME per member is simplest to show. The tests only ever make one field bad.
+
+### 78. Kitchen members bypass the checks but not the engine
+
+- **What:** `rolesThatSplit` leaves kitchen out, since kitchen never has named members. But the engine resolves hours for **every** profile rule role that has members, and that includes `kitchen` (`rolesNeedingHours` in `calculate.ts`). A kitchen member with a bad clock pair passes `checkTeamHours` and then makes `calculateShift` throw INVALID_CLOCK. That breaks the contract's guarantee.
+- **Resolution:** Either the engine skips hour resolution for roles that are never split (kitchen), or the store adds any profile role that has members to `rolesThatSplit`. The key property only generates bartenders, barbacks and hosts to stay inside the contract.
+- **Tests:** `teamHours › property: checkTeamHours error-free => calculateShift never throws …` (kitchen excluded deliberately).
+
+### 79. `copyHoursToRole` and pending drafts
+
+- **What:**
+  - Copying writes **committed** values. Another member with leftover typed text (`hoursText`) would then win over the copied value, because typed text takes precedence.
+  - Copying from a member with no hours isn't defined (it would presumably clear the others). The UI only shows the link on a member with valid hours, so this shouldn't happen.
+- **Resolution:** When copying, the store should clear the other members' `*Text` drafts. Not tested; `copyHoursToRole` takes plain `TeamMember`s.
+- **Tests:** `hoursInput › copyHoursToRole › *` cover hours, clock times, other roles, immutability, unknown id and single-member roles.
+
+### 80. `clockHours` only accepts strict `HH:mm`
+
+- **What:** `clockHours` is specified for two `HH:mm` values. The tests assume it doesn't do forgiving parsing itself (`abc` → null). The UI must run `parseTimeInput` first.
+- **Tests:** `hoursInput › clockHours › invalid input …`.
+
+---
+
 ## Coverage map vs. the brief
 
 | Brief item                                                              | Where                                                                      |
@@ -568,3 +649,5 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 | M5: `checkProfile` codes, ordering, error-free ⇒ engine never throws    | `src/lib/__tests__/profileValidation.test.ts`                              |
 | M5: schema v2 (rule labels) migration from v1                           | `src/db/__tests__/migrations-v2.test.ts`                                   |
 | M5: editor-style profiles end to end, `wholeDollarShares` path          | `src/engine/__tests__/customProfiles.test.ts`                              |
+| M6: time/hours parsing, clockHours, formatHours, copyHoursToRole        | `src/lib/__tests__/hoursInput.test.ts`                                     |
+| M6: checkTeamHours codes, precedence, PARTIAL_HOURS, ordering, property | `src/lib/__tests__/teamHours.test.ts`                                      |
