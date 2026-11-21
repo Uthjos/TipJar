@@ -512,3 +512,27 @@ None new. Still open from §11: Q6 (cloud backup / accounts).
 - `npx prettier --check .`: all files formatted.
 - `npx expo export --platform android`: bundled. One Hermes bundle (`entry-….hbc`, 3 MB), exported to the scratchpad.
 - `git status`: clean. Nothing pushed.
+
+---
+
+# Round 6b: blur fix
+
+Merged `fix/m6-blur` (`d2c9be3`, Implementer) into main as `63b1c15` (--no-ff). Main was at `35aeb9c`.
+
+**The bug (found on the emulator).** In a clock field, typing "5pm" and then tapping the next field made the field show `05:00`. The on-blur handler normalised a stale copy of the text, captured one keystroke behind. The committed value stayed `17:00`, so the screen and the money disagreed, and a bogus LONG_SHIFT warning appeared. The hours field had the same problem.
+
+**The fix (`app/shift/team.tsx`, reviewed).**
+
+- On blur, both handlers read the latest typed text and the committed value from the store (`useShiftStore.getState()`), not from the render's closure.
+- They only rewrite the text when its normalised form equals the committed value, so normalising can't make the field and the money disagree.
+
+The diff is limited to that component, plus a 2-test regression file, `src/__tests__/impl.m6blur.test.tsx`. There are no engine or store changes.
+
+**Checks.**
+
+- `npm test`: **38 suites, 817 tests passed**, 0 failed.
+- `npm run lint`: 0 errors, 0 warnings.
+- `npm run typecheck`: clean.
+- `npx prettier --check .`: clean.
+- `npx expo export --platform android`: bundled.
+- `git status`: clean. Nothing pushed.
