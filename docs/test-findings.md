@@ -18,6 +18,8 @@ They were run against throwaway stubs outside the repo (not committed). New find
 
 **Update (test/m6-hours):** milestone 6 acceptance tests against `docs/m6-contract.md`: `src/lib/__tests__/hoursInput.test.ts` and `src/lib/__tests__/teamHours.test.ts`, with helpers in `src/test-support/hoursFixtures.ts`. They were run against a throwaway stub outside the repo (not committed). New findings start at **#68**.
 
+**Update (test/m7-history):** milestone 7 acceptance tests against `docs/m7-contract.md`: `src/lib/__tests__/history.test.ts` and `src/lib/__tests__/csv.test.ts`, with fixtures in `src/test-support/historyFixtures.ts`. They were run against throwaway stubs outside the repo (not committed). New findings start at **#81**.
+
 The suite lives in `src/engine/__tests__/` (`money`, `hours`, `calculate`, `golden`, `properties`). Builders are in `src/test-support/builders.ts`. Every expected value is worked out by hand in a comment next to the assertion. Before committing, the suite was type-checked and run against a throwaway reference stub outside the repo: 147 tests passed, and the files compile under `strict` + `noUncheckedIndexedAccess` + `noUnusedLocals`. The stub was written from the same reading of the spec, so this proves the tests agree with each other. It does not prove they match the real implementation.
 
 Each item below gives **what**, **why**, a **proposed resolution**, and the **affected tests** (`file › describe › it`, abbreviated).
@@ -618,36 +620,129 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 
 ---
 
+## I. Milestone 7 history and CSV (test/m7-history)
+
+### 81. Week labels always include the year
+
+- **What:** The contract's labels always carry the year ("Nov 15 – 21, 2026"), even in the current year, where "Nov 15 – 21" would be shorter on a phone.
+- **Resolution:** The tests encode the contract (year always shown). If the UI wants to drop the year for the current year, do it in the UI, not in `periodRange`.
+- **Tests:** `history › periodRange: week › *`, `› shiftPeriod › *`.
+
+### 82. Average per shift, not per hour
+
+- **What:** `averageEarned` is per shift (`earned / shiftCount`, rounded half-up). Per hour would usually mean more to people in tipped work, but the user's own hours are only known in the bartender flow when they entered hours. In the server flow the user isn't on the team.
+- **Resolution:** Keep per shift for v1. If an "earned per hour" figure is wanted later, it needs a "my hours" field on `ShiftInput`.
+- **Tests:** `history › summarize: averages, … › averageEarned rounds half-up`.
+
+### 83. What counts as "where your tip-outs went"
+
+- **What:** The tests assume `byRole` and `byCoworker` only list money that actually left the user: paid role amounts and member amounts. These are **excluded**:
+  - retained shares of missing roles;
+  - `roundingAdjustment` (the floor trim plus the odd dollars held back);
+  - `keptChange`;
+  - the bar's own `keptSplit`.
+
+  Kitchen appears in `byRole` but never in `byCoworker`. So `sum(byRole) == tippedOut`, and (server flow) `sum(byCoworker) + memberless roles == tippedOut`.
+
+- **Resolution:** Confirm. Retained and rounding amounts could be shown as a separate "stayed with you" line, not in the "went to" lists.
+- **Tests:** `history › summarize: the week … › byRole …`, `› byCoworker …`, `history › summarize properties › *`.
+
+### 84. `byCoworker` details
+
+- **What:** The tests assume:
+  - "most recent spelling" means the latest `input.date` (then `savedAt`), not the order of the input array; the tests pass shifts out of order;
+  - "roles in first-seen order" means date order;
+  - `shifts` counts shifts where the person was paid more than 0.
+
+  How a coworker paid $0 on one shift and something on another is counted isn't asserted.
+
+- **Resolution:** Sort the shifts by date and `savedAt` inside `summarize` before aggregating, so the output doesn't depend on input order (tested: `is unaffected by the order shifts are passed in`). Count `shifts` only where the amount is above 0, as `byRole` does.
+- **Tests:** `history › summarize: byCoworker name handling › *`.
+
+### 85. `payoutsCsv` columns and row order
+
+- **What:** The contract doesn't settle these:
+  - (a) Whether the `role` column holds the role id or a label. The tests assume a label, from `opts.roleLabel` or by default `roleLabel()` ("Kitchen (KTO)").
+  - (b) The `name` column for `role` and `retained` rows. Assumed blank.
+  - (c) The role written on `bar_split` rows. Assumed `bartender` (its label).
+  - (d) Row order within a shift. The tests compare rows as a set, and only require that each shift's rows are contiguous and that shifts come oldest first.
+  - (e) Whether 0-amount rows appear, such as a redistributed missing role or a $0 member.
+- **Resolution:** Confirm (a)–(c). For (d), use profile rule order, then members, then retained, then bar_split. For (e), skip 0-amount role and retained rows, but keep $0 member rows so the person is visible.
+- **Tests:** `csv › payoutsCsv › *`.
+
+### 86. Payouts don't reconcile to total tips
+
+- **What:** `paid` + `role` rows equal `tipped_out`, and `bar_split` rows equal `kept − kept_change`. But `kept_change`, the rounding trim and the held-back dollars have no payout rows. Adding up the payouts file therefore never gives total tips.
+- **Resolution:** Document that the shifts file is the reconciliation view. Optionally add a `kept_by_you` row kind for the user's own amount, including change.
+- **Tests:** `csv › property: CSV sums match each shift` (checks `bar_split + kept_change = kept`).
+
+### 87. CSV locale and BOM
+
+- **What:** The files use `.` decimals and `,` separators with no BOM. Excel in comma-decimal locales (most of Europe) splits the money columns wrongly, and Excel on Windows misreads UTF-8 names ("Zoë") without a BOM.
+- **Resolution:** Prefix the files with a UTF-8 BOM (`\uFEFF`); Numbers and Google Sheets ignore it. If that's adopted, the header tests need the BOM prefix. Keep `.` decimals: CSV is a data format, and spreadsheets can re-import it with locale settings.
+- **Tests:** `csv › shiftsCsv › uses CRLF line endings …` (currently expects the header at position 0).
+
+### 88. CSV formula injection
+
+- **What:** A coworker or profile name such as `=HYPERLINK(...)` or `@SUM(...)` is run as a formula when the CSV is opened in Excel or Sheets. `csvEscape` only applies the RFC 4180 rules.
+- **Resolution:** For **text** fields (names, profile names), prefix a `'` when the value starts with `=`, `+`, `@`, a tab or a CR, or with `-` not followed by a digit. Leave numeric columns alone. Not tested.
+
+### 89. Which period an edited shift belongs to
+
+- **What:** Periods are assigned by `input.date`. Editing a shift's date moves it to the new date's period, while `savedAt` stays the original (M4 #43). Within a date, the CSV and the History list order by `savedAt`, so an edited shift keeps its original place among same-day shifts.
+- **Resolution:** That's the intended reading; the tests assume it. History must reload after an edit (the contract says so).
+
+### 90. "Today" for the current period
+
+- **What:** Dates are time-zone-free `yyyy-MM-dd` strings. But the anchor for "the current week" (and for disabling "next") has to come from the device's **local** date. `new Date().toISOString().slice(0, 10)` gives the UTC date, which is wrong in the evening in the Americas: a server closing out at 9pm in Chicago would land on tomorrow's date.
+- **Resolution:** Build the anchor from local date parts (`date-fns` `format(new Date(), 'yyyy-MM-dd')`). The same applies to the New Shift date default. Not testable in the pure helpers.
+
+### 91. Hours in the payouts file
+
+- **What:** Members on an equal split report `hours: 0`, which prints blank. A member whose entered hours were all 0 (the engine's equal-split fallback) also prints blank, so the two can't be told apart. Clock-time hours print with up to 2 decimals (7.333 → `7.33`).
+- **Resolution:** Fine as is.
+- **Tests:** `csv › payoutsCsv › hours: blank when not entered, …`.
+
+### 92. `isUser` on a tip-out role member breaks the coworker reconciliation
+
+- **What:** If the user is listed as a member of a tip-out role (unusual, but possible in the server flow), they're skipped from `byCoworker` but their amount is still in `tippedOut`. Then `sum(byCoworker) + kitchen ≠ tippedOut`.
+- **Resolution:** Acceptable. Document that the identity holds when no `isUser` member is paid. The property generator doesn't mark tip-out members as the user.
+- **Tests:** `history › summarize properties › server flow: sum(byCoworker) + memberless role amounts (kitchen) = tippedOut`.
+
+---
+
 ## Coverage map vs. the brief
 
-| Brief item                                                              | Where                                                                      |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Golden 1 / Golden 2 retain / redistribute (+ roundMemberShares)         | `golden.test.ts`                                                           |
-| Rounding off                                                            | `calculate › rounding OFF`                                                 |
-| Unequal hours (roles + keptSplit)                                       | `calculate › hours: unequal splits`                                        |
-| Clock-in/out across midnight                                            | `hours.test.ts`, `calculate › hours: clock-in / clock-out across midnight` |
-| Both missing-role options                                               | `golden`, `calculate › missing roles`                                      |
-| Zero food sales / zero tips                                             | `calculate › zero food sales`, `› zero tips`                               |
-| Custom profile (netSales / totalTips basis, custom role ids, 0% / 100%) | `calculate › custom profiles`                                              |
-| Carve-outs exceed pool (cap + warning)                                  | `calculate › carve-outs exceeding the pool`                                |
-| Food > net warning                                                      | `calculate › food > net sales`                                             |
-| PARTIAL_HOURS and the other validation codes                            | `calculate › hours: partial hours …`, `› validation errors`                |
-| Largest-remainder tie-breaking                                          | `money.test.ts`, plus member/keptSplit tie tests                           |
-| fast-check invariants                                                   | `properties.test.ts` (seed 20261118, 400 runs)                             |
-| Whole-dollar member shares (owner Q1), `roundMemberShares` default true | `golden.test.ts`, `calculate › rounding ON`, `› hours: unequal splits`     |
-| `keptChange` + whole-dollar `keptSplit` (owner Q2)                      | `golden.test.ts`, `calculate › keptChange …`, `properties`                 |
-| `poolBasis` + `POOL_EXCEEDS_TIPS` (owner Q4)                            | `calculate › pool basis …`, `properties`                                   |
-| Equal clock-in/out is `INVALID_CLOCK` (owner Q5)                        | `hours.test.ts`, `review.test.ts`, `calculate › equal clock-in and …`      |
-| Odd-dollar rule and held-back dollars (owner Q7)                        | `wholeDollars.test.ts`, `golden`, `calculate › whole-dollar held-back …`   |
-| `ZERO_SHARE_AFTER_ROUNDING` (owner Q8)                                  | `calculate › ZERO_SHARE_AFTER_ROUNDING warning`, `properties`              |
-| `TeamMember.isUser` ignored by the engine (owner Q9)                    | `calculate › TeamMember.isUser …`, `properties`                            |
-| M4: schema, version, idempotent migrate, cascades, integer money        | `src/db/__tests__/migrations.test.ts`                                      |
-| M4: default-profile seeding                                             | `src/db/__tests__/seed.test.ts`                                            |
-| M4: profiles / shifts / coworkers / settings repositories               | `src/db/__tests__/repositories.test.ts`                                    |
-| M4: saved shifts are snapshots (incl. fast-check round-trip)            | `src/db/__tests__/snapshot.test.ts`                                        |
-| M5: pure profile helpers                                                | `src/lib/__tests__/profiles.test.ts`                                       |
-| M5: `checkProfile` codes, ordering, error-free ⇒ engine never throws    | `src/lib/__tests__/profileValidation.test.ts`                              |
-| M5: schema v2 (rule labels) migration from v1                           | `src/db/__tests__/migrations-v2.test.ts`                                   |
-| M5: editor-style profiles end to end, `wholeDollarShares` path          | `src/engine/__tests__/customProfiles.test.ts`                              |
-| M6: time/hours parsing, clockHours, formatHours, copyHoursToRole        | `src/lib/__tests__/hoursInput.test.ts`                                     |
-| M6: checkTeamHours codes, precedence, PARTIAL_HOURS, ordering, property | `src/lib/__tests__/teamHours.test.ts`                                      |
+| Brief item                                                               | Where                                                                      |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| Golden 1 / Golden 2 retain / redistribute (+ roundMemberShares)          | `golden.test.ts`                                                           |
+| Rounding off                                                             | `calculate › rounding OFF`                                                 |
+| Unequal hours (roles + keptSplit)                                        | `calculate › hours: unequal splits`                                        |
+| Clock-in/out across midnight                                             | `hours.test.ts`, `calculate › hours: clock-in / clock-out across midnight` |
+| Both missing-role options                                                | `golden`, `calculate › missing roles`                                      |
+| Zero food sales / zero tips                                              | `calculate › zero food sales`, `› zero tips`                               |
+| Custom profile (netSales / totalTips basis, custom role ids, 0% / 100%)  | `calculate › custom profiles`                                              |
+| Carve-outs exceed pool (cap + warning)                                   | `calculate › carve-outs exceeding the pool`                                |
+| Food > net warning                                                       | `calculate › food > net sales`                                             |
+| PARTIAL_HOURS and the other validation codes                             | `calculate › hours: partial hours …`, `› validation errors`                |
+| Largest-remainder tie-breaking                                           | `money.test.ts`, plus member/keptSplit tie tests                           |
+| fast-check invariants                                                    | `properties.test.ts` (seed 20261118, 400 runs)                             |
+| Whole-dollar member shares (owner Q1), `roundMemberShares` default true  | `golden.test.ts`, `calculate › rounding ON`, `› hours: unequal splits`     |
+| `keptChange` + whole-dollar `keptSplit` (owner Q2)                       | `golden.test.ts`, `calculate › keptChange …`, `properties`                 |
+| `poolBasis` + `POOL_EXCEEDS_TIPS` (owner Q4)                             | `calculate › pool basis …`, `properties`                                   |
+| Equal clock-in/out is `INVALID_CLOCK` (owner Q5)                         | `hours.test.ts`, `review.test.ts`, `calculate › equal clock-in and …`      |
+| Odd-dollar rule and held-back dollars (owner Q7)                         | `wholeDollars.test.ts`, `golden`, `calculate › whole-dollar held-back …`   |
+| `ZERO_SHARE_AFTER_ROUNDING` (owner Q8)                                   | `calculate › ZERO_SHARE_AFTER_ROUNDING warning`, `properties`              |
+| `TeamMember.isUser` ignored by the engine (owner Q9)                     | `calculate › TeamMember.isUser …`, `properties`                            |
+| M4: schema, version, idempotent migrate, cascades, integer money         | `src/db/__tests__/migrations.test.ts`                                      |
+| M4: default-profile seeding                                              | `src/db/__tests__/seed.test.ts`                                            |
+| M4: profiles / shifts / coworkers / settings repositories                | `src/db/__tests__/repositories.test.ts`                                    |
+| M4: saved shifts are snapshots (incl. fast-check round-trip)             | `src/db/__tests__/snapshot.test.ts`                                        |
+| M5: pure profile helpers                                                 | `src/lib/__tests__/profiles.test.ts`                                       |
+| M5: `checkProfile` codes, ordering, error-free ⇒ engine never throws     | `src/lib/__tests__/profileValidation.test.ts`                              |
+| M5: schema v2 (rule labels) migration from v1                            | `src/db/__tests__/migrations-v2.test.ts`                                   |
+| M5: editor-style profiles end to end, `wholeDollarShares` path           | `src/engine/__tests__/customProfiles.test.ts`                              |
+| M6: time/hours parsing, clockHours, formatHours, copyHoursToRole         | `src/lib/__tests__/hoursInput.test.ts`                                     |
+| M6: checkTeamHours codes, precedence, PARTIAL_HOURS, ordering, property  | `src/lib/__tests__/teamHours.test.ts`                                      |
+| M7: periods, labels, stepping, summarize totals/series/byRole/byCoworker | `src/lib/__tests__/history.test.ts`                                        |
+| M7: csvEscape, centsToCsv, shiftsCsv, payoutsCsv, RFC 4180 round-trip    | `src/lib/__tests__/csv.test.ts`                                            |
