@@ -20,6 +20,8 @@ They were run against throwaway stubs outside the repo (not committed). New find
 
 **Update (test/m7-history):** milestone 7 acceptance tests against `docs/m7-contract.md`: `src/lib/__tests__/history.test.ts` and `src/lib/__tests__/csv.test.ts`, with fixtures in `src/test-support/historyFixtures.ts`. They were run against throwaway stubs outside the repo (not committed). New findings start at **#81**.
 
+**Update (test/m8-scan):** milestone 8 receipt-parser acceptance tests against `docs/m8-contract.md`: `src/ocr/__tests__/{money,parseReceipt,samples}.test.ts`, with 13 receipt fixtures in `src/test-support/receipts/`. They were run against a throwaway parser stub outside the repo (not committed). New findings start at **#93**.
+
 The suite lives in `src/engine/__tests__/` (`money`, `hours`, `calculate`, `golden`, `properties`). Builders are in `src/test-support/builders.ts`. Every expected value is worked out by hand in a comment next to the assertion. Before committing, the suite was type-checked and run against a throwaway reference stub outside the repo: 147 tests passed, and the files compile under `strict` + `noUncheckedIndexedAccess` + `noUnusedLocals`. The stub was written from the same reading of the spec, so this proves the tests agree with each other. It does not prove they match the real implementation.
 
 Each item below gives **what**, **why**, a **proposed resolution**, and the **affected tests** (`file › describe › it`, abbreviated).
@@ -711,6 +713,105 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 
 ---
 
+## J. Milestone 8 receipt parsing (test/m8-scan)
+
+### 93. The fixtures are not real receipts
+
+- **What:** The 13 fixtures in `src/test-support/receipts/` (3 Toast, 3 Square, 3 Aloha, 4 generic) were written from typical report layouts, not from real OCR output. These label spellings are best guesses:
+  - Toast "Cash Tips Declared";
+  - Square "Tips" in the Sales Summary;
+  - Aloha "Charge Tips" / "Declared Tips" / "Category Totals".
+- **Resolution:** When the owner supplies photos, run them through ML Kit and add the raw text as new fixtures, with the expected values read off the paper. Keep the current ones as regression tests.
+
+### 94. Bare "Tips" and "Gratuity" are risky total-tips synonyms
+
+- **What:** `tips` and `gratuity` match almost any tips-related line. A bare `TIPS` section header, a Toast "Gratuity" (auto-grat) line, or any tips line the POS doesn't have a longer synonym for ("Net Tips", "Charge Tips" without the Aloha synonym) is read as an explicit **total**. That then beats card + cash.
+- **Resolution:** Keep `tips` only for an exact whole-line label ("Tips $340.56", as Square prints it). Drop bare `gratuity` from `totalTips` (see #97). Add `net tips`, `tips paid`, `tips due`, `tip pool` to `ignore`.
+- **Tests:** `parseReceipt › rule 2 › the longest matching synonym wins …`, and fixtures `square-sales-summary`, `toast-server-checkout`.
+
+### 95. Aloha's "Charge Tips" isn't in the generic synonyms
+
+- **What:** The generic list has `charged tips` but not `charge tips`, which is the Aloha label. Without an Aloha synonym, "Charge Tips 305.56" falls through to bare `tips` (#94), giving total tips $305.56 instead of $340.56.
+- **Resolution:** Add `charge tips` (and probably `charged tips`) to `LABELS.aloha.cardTips`. The tests assume it's there.
+- **Tests:** fixtures `aloha-server-checkout`, `aloha-messy-dot-leaders`.
+
+### 96. The next-line fallback can steal another label's value
+
+- **What:** Read literally, rule 3 says "label with no amount → first money token on the next line". So a section header like `TIPS` takes the amount from the `Credit Card Tips $305.56` line below it. That makes a second total-tips candidate, which turns the confidence to medium. If there's no explicit total, it can win outright: "TIPS / Credit Card Tips 40 / Cash Tips 10" would give $40 as the total, not $50.
+- **Resolution:** Skip the fallback when the next line itself matches a label. The tests assume this.
+- **Tests:** `parseReceipt › rule 3 › the next-line fallback never takes the value of another label line`, fixture `toast-server-checkout` (expects high).
+
+### 97. Service charges and auto-gratuity
+
+- **What:** Toast and Aloha list auto-gratuity and service charges separately from tips. Whether they count as the server's tips depends on the restaurant: in many US places a service charge is house revenue or paid through payroll. Today, a "Gratuity $45.00" line would count as an explicit total.
+- **Resolution:** Put `service charge`, `auto gratuity`, `auto grat` and bare `gratuity` in `ignore` for v1. The Confirm screen lets the user add them if their restaurant pays them out. The fixtures use "Service Charges" and "Auto Gratuity %", which are ignored or unmatched.
+
+### 98. Tips that already have tip-outs taken off
+
+- **What:** Some reports show tips **after** tip share: Aloha "Tips Owed to Server", Toast "Tips Owed", a "Net Tips" line. Using those as total tips would deduct the tip-outs twice. `tips owed` and `tip share` are ignored, but "Net Tips" would match `tips` (#94).
+- **Resolution:** Ignore `net tips`, `tips owed`, `tips paid out` and `tip share`. Prefer card + cash over any "net" tips line. Not tested beyond `Tips Owed` and `Tip Share Paid`.
+
+### 99. Where each POS puts food sales
+
+- **What:** None of the three POS systems prints a "Food Sales" line by default:
+  - Toast shows "Food" under _Sales Category Summary_.
+  - Square's _Category Sales_ uses the restaurant's own category names, which may be "Entrees", "Apps", "Kitchen" and so on.
+  - Aloha's _Category Totals_ uses names like "FOOD".
+
+  The category rule only matches a line that is exactly "Food". It also says "a **preceding** line contains categor…" without saying how far back that header can be. The tests always put the header immediately before the category list.
+
+- **Resolution:** Let users map their category names to food sales, for example a Settings list defaulting to `food`. Define the section as "after a category header and before the next blank line or header". Item names containing "food" ("Food Runner Tip Pool", "Seafood Platter") must not match. That case is tested.
+- **Tests:** `parseReceipt › rule 6 › *`.
+
+### 100. Several servers, or the whole store, on one report
+
+- **What:** A Square Sales Summary is store-wide unless it's filtered by team member, and Aloha manager reports list every server. "Last occurrence wins" would then pick the last server's figures, or the store total.
+- **Resolution:** Detect repeated `Server:` / `Employee:` / `Team member:` blocks, or more than one net-sales block. When found, add a note: "This looks like a report for more than one person — scan your own checkout." Not tested.
+
+### 101. How confidences combine
+
+- **What:** The tests assume the **lowest** applicable confidence wins:
+  - an OCR-fixed token is low, even on the same line or as part of card + cash;
+  - card + cash is the lowest of `high` and its two parts;
+  - a next-line value that was also OCR-fixed is low.
+- **Tests:** fixtures `toast-messy-split-lines`, `aloha-messy-dot-leaders`.
+
+### 102. Which synonyms are "looser"
+
+- **What:** Rule 4 says to prefer an exact synonym over a looser one, but the only example of a loose one is `sales (net)`. The tests treat `sales (net)` and the `Food` category rule as loose, and every other synonym as exact. So Square's bare "Tips" line is high.
+- **Resolution:** Mark looseness in the config map, for example `{ text: 'sales (net)', loose: true }`, so it's data rather than code.
+- **Tests:** `parseReceipt › rule 4 › *`, fixture `generic-cash-only-no-food`.
+
+### 103. Scope of the ignore list
+
+- **What:** The contract says an ignored line is "skipped for that field". The tests assume a line matching any ignore label is skipped for **every** field. For example, "Net Sales Tax 5.00" fills neither net sales nor anything else, and "Refund Tips" fills nothing.
+- **Resolution:** Either is defensible. Per-field ignore lists would be more precise. Also watch `void` matching table headers.
+- **Tests:** `parseReceipt › rule 2 › ignore label: …`.
+
+### 104. Money-token edge cases
+
+- **What:** The tests assume:
+  - tokens with no real digit ("OO", "S", "SALES") are rejected, so OCR fixes only apply to tokens that already contain a digit;
+  - `%` values are rejected;
+  - three decimals, and European `1.234,56`, aren't handled.
+
+  Within a receipt line, splitting tokens on whitespace means "1 234.56" (a space inside the number) becomes two tokens. Stripping `:` as a leader also turns times like `5:02` into two numbers.
+
+- **Resolution:** The line tokenizer should join digit groups separated by a single space before calling `parseMoneyToken`. Only strip `:` when it directly follows a label. Not tested at line level.
+- **Tests:** `money › *`.
+
+### 105. Positional matching without a match
+
+- **What:** With coordinates, the tests assume there's no next-line fallback when no value sits on the same row. A value more than half a line-height away is not used, even if it's the next line in the OCR output. Lines with only some coordinates, or zero/negative heights, are only checked for not throwing.
+- **Tests:** `parseReceipt › rule 3 › with coordinates, a value more than half a line-height away is not used`, `› rule 9 › for any OcrLine[] with odd coordinates`.
+
+### 106. Notes on a clean receipt
+
+- **What:** The tests assume `notes` is empty when nothing needs the user's attention: an explicit total, net and food all found, and no sanity problems. Card + cash, card-only, cash-only, negative amounts and sanity checks each add a note.
+- **Tests:** `parseReceipt › rule 8 › a clean receipt has no notes`, `› rule 5 › *`.
+
+---
+
 ## Coverage map vs. the brief
 
 | Brief item                                                               | Where                                                                      |
@@ -746,3 +847,6 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 | M6: checkTeamHours codes, precedence, PARTIAL_HOURS, ordering, property  | `src/lib/__tests__/teamHours.test.ts`                                      |
 | M7: periods, labels, stepping, summarize totals/series/byRole/byCoworker | `src/lib/__tests__/history.test.ts`                                        |
 | M7: csvEscape, centsToCsv, shiftsCsv, payoutsCsv, RFC 4180 round-trip    | `src/lib/__tests__/csv.test.ts`                                            |
+| M8: parseMoneyToken rules, OCR fixes, round-trip                         | `src/ocr/__tests__/money.test.ts`                                          |
+| M8: parseReceipt rules 1–9, detectPos, never throws                      | `src/ocr/__tests__/parseReceipt.test.ts`                                   |
+| M8: 13 sample receipts (Toast, Square, Aloha, generic, messy OCR)        | `src/ocr/__tests__/samples.test.ts`, `src/test-support/receipts/`          |
