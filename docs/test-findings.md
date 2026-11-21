@@ -8,6 +8,14 @@ Author: Agent 2 (Tester), branch `test/engine`; updated on `test/owner-decisions
 
 **Update (test/m4-persistence):** milestone 4 acceptance tests against `docs/m4-contract.md`: `src/db/__tests__/{migrations,seed,repositories,snapshot}.test.ts`, plus fixtures in `src/test-support/shiftFixtures.ts`. They were run against a throwaway sql.js stub of the contract outside the repo (not committed); the stub was also deliberately broken to confirm the tests catch ordering, null-vs-absent and missing-cascade bugs. New findings start at **#40**.
 
+**Update (test/m5-profiles):** milestone 5 acceptance tests against `docs/m5-contract.md`:
+
+- `src/lib/__tests__/profiles.test.ts` and `src/lib/__tests__/profileValidation.test.ts`
+- `src/db/__tests__/migrations-v2.test.ts`
+- `src/engine/__tests__/customProfiles.test.ts`
+
+They were run against throwaway stubs outside the repo (not committed). New findings start at **#55**.
+
 The suite lives in `src/engine/__tests__/` (`money`, `hours`, `calculate`, `golden`, `properties`). Builders are in `src/test-support/builders.ts`. Every expected value is worked out by hand in a comment next to the assertion. Before committing, the suite was type-checked and run against a throwaway reference stub outside the repo: 147 tests passed, and the files compile under `strict` + `noUncheckedIndexedAccess` + `noUnusedLocals`. The stub was written from the same reading of the spec, so this proves the tests agree with each other. It does not prove they match the real implementation.
 
 Each item below gives **what**, **why**, a **proposed resolution**, and the **affected tests** (`file › describe › it`, abbreviated).
@@ -422,6 +430,113 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 
 ---
 
+## G. Milestone 5 profiles & settings (test/m5-profiles)
+
+### 55. `roleIdFromLabel` for unusual labels
+
+- **What:** The contract says "spaces/punctuation → '-'". It doesn't cover:
+  - accented letters (kept, stripped, or turned into '-'?);
+  - non-Latin scripts and emoji;
+  - apostrophes ("Hannah's crew" → `hannah-s-crew`);
+  - near-misses of built-ins ("Bar Back" → `bar-back`, not `barback`).
+- **Resolution:** The tests assume:
+  - letters and digits in any script are kept (`\p{L}\p{N}`), so "Café Runner" → `café-runner`, with composed and decomposed input giving the same id;
+  - an apostrophe becomes '-';
+  - only exact built-in labels map to built-in ids.
+
+  Suggestion: drop apostrophes rather than dashing them. Emoji-only labels clean to `''`, which `RULE_ROLE_REQUIRED` then catches.
+
+- **Tests:** `profiles › roleIdFromLabel › *`.
+
+### 56. "Kitchen" vs "Kitchen (KTO)"
+
+- **What:** The kitchen role appears with two different names:
+  - `roleLabel('kitchen')` returns "Kitchen (KTO)", which is what `displayRole` shows.
+  - The contract's `profileSummary` example shows "Kitchen 2% of food sales".
+- **Why:** Two names for one role. Also, a user who types the label the app itself shows ("Kitchen (KTO)") should get the built-in kitchen role, not a new `kitchen-kto` role.
+- **Resolution:** The summary tests accept either form. The tests assume `roleIdFromLabel('Kitchen (KTO)')` returns `'kitchen'`. Decide on one short label for the summary.
+- **Tests:** `profiles › profileSummary › Server default / Bartender default / only fixed rules`, `profiles › roleIdFromLabel › maps the built-in display label "Kitchen (KTO)" back to kitchen`.
+
+### 57. Rule helpers given out-of-range indexes
+
+- **What:** The contract doesn't say what `updateRule`, `removeRule` and `moveRule` do with an index of -1 or one past the end.
+- **Resolution:** The tests assume they return an unchanged copy and don't throw. They also assume `moveRule` is an array move: remove at `from`, then insert at `to`.
+- **Tests:** `profiles › rule editing helpers … › out-of-range indexes leave the rules unchanged and do not throw`, `… › moveRule moves first->last, …`.
+
+### 58. A 0% pool
+
+- **What:** A pool of 0% is within "0–100", so it isn't an error. But nothing would ever be tipped out.
+- **Resolution:** The tests assume 0% and 100% are both error-free. Consider a warning for 0%, such as "nothing is tipped out".
+- **Tests:** `profileValidation › valid profiles › pool percent 0 and 100 are in range`.
+
+### 59. Several issues on one rule or profile
+
+- **What:** The contract doesn't say whether one rule can carry several issues. Examples:
+  - an empty role with a bad weight;
+  - a duplicate bartender rule in a bartender profile, which is both `DUPLICATE_ROLE` and `BARTENDER_RULE_IN_BARTENDER_PROFILE`.
+
+  It also doesn't say whether `NO_RULES` suppresses `NO_SHARE_RULE`.
+
+- **Resolution:** The tests assume every issue is reported (no "first one wins"), in a stable order. They don't assert whether `NO_SHARE_RULE` appears alongside `NO_RULES`. Suggestion: suppress `NO_SHARE_RULE` when there are no rules at all.
+- **Tests:** `profileValidation › ordering and stability › several problems on one rule are all reported, in a stable order`.
+
+### 60. The unpaid remainder (no share rule) isn't reported
+
+- **What:** With only fixed rules, the engine pays the carve-outs, and the rest of the pool stays in `kept`. It isn't counted in `retained` or in `roundingAdjustment`. A "Kitchen only" 30% profile on $400 shows `pool` $16, and nothing explains the gap.
+- **Resolution:** Either add `ShiftResult.unallocated`, or have the engine also warn `NO_SHARE_RULE`, so the Results screen can say "$104 of the pool has no one to go to and stays with you".
+- **Tests:** `customProfiles › no share rule … › *`.
+
+### 61. Is `rule.role` or `rule.label` the source of truth?
+
+- **What:** Custom rules carry both `role` (the slug) and `label`. The contract doesn't say whether `checkProfile` and the repository trust `role` as given or recompute it from `label`. Renaming a label in the editor also changes the role id. Then:
+  - past shifts (snapshots) and coworkers' `usualRole` keep the old id;
+  - History's per-role totals (M7) split one role into two.
+- **Resolution:** Treat `role` as the source of truth, set once when the rule is created. Editing the label changes only the display, unless the user explicitly re-keys the role. The tests always pass a matching `role`.
+
+### 62. Labels on built-in roles
+
+- **What:** A custom label that maps onto a built-in ("Bartenders", "Servers") gives `role: 'bartender'` while keeping `label: 'Bartenders'`. The contract says built-ins "have no label".
+- **Resolution:** The editor should drop the label when the role resolves to a built-in. The validation tests build such rules with a label to prove `DUPLICATE_ROLE`, `SELF_TIP_OUT` and #13d still fire.
+- **Tests:** `profileValidation › … via a "Bartenders" label`, `… via a "Servers" label`, `DUPLICATE_ROLE when a custom label maps onto a built-in role`.
+
+### 63. Infinite weights and non-normalised names
+
+- **What:**
+  - `RULE_WEIGHT_POSITIVE` only says "> 0", so `Infinity` passes.
+  - `NAME_TAKEN` compares trimmed and lower-cased names, so composed and decomposed "Café" don't collide.
+- **Resolution:** Also require finite weights. Normalise names to NFC before comparing, as `coworkerKey` already does (M4 #49). Neither is tested.
+
+### 64. When onboarding shows
+
+- **What:** "Shown when `onboarded` is not true and there are no saved shifts" leaves these cases open:
+  - a stored non-boolean such as the string `'true'` from a bad write;
+  - the app killed mid-onboarding (shows again, which is fine);
+  - a failed DB read during hydrate, which looks like "no shifts" and would wrongly show onboarding;
+  - a user who later deletes every shift (`onboarded` stays true, so it doesn't show; fine).
+- **Resolution:** Use a strict `onboarded === true` check, and don't show onboarding if hydrate failed. These are store behaviours (implementer-owned tests), so none are tested here.
+
+### 65. #44 can be bypassed by switching `appliesTo`
+
+- **What:** The rule "can't delete the last profile for its `appliesTo`" can be dodged by **editing**: changing the only bartender profile to `appliesTo: 'server'` leaves no bartender profile. Also, "reset `defaultProfileId` to the remaining profile (built-in first)" doesn't say what happens if the built-in for that role was itself deleted.
+- **Resolution:** Block changing `appliesTo` on the last profile for a role, either in the store or as a `checkProfile` issue that takes `others`. If no built-in remains, fall back to the first remaining profile by name.
+
+### 66. Milestone 4 tests that break under milestone 5
+
+- **What:**
+  - `migrations.test.ts › migrate › SCHEMA_VERSION is 1 for milestone 4` fails once the schema is v2. This was confirmed against the stub; the other 118 M4 db tests passed against a v2 stub.
+  - If the **repository's** `saveProfile` runs `checkProfile`, these M4 tests would also start throwing:
+    - `repositories › profiles › a profile with no rules round-trips` (`NO_RULES`);
+    - `repositories › profiles › each poolBasis value round-trips …`, whose copies share the name "Net sales pool" and so hit `NAME_TAKEN`.
+- **Resolution:** The maintainer updates the version test to `SCHEMA_VERSION >= 1` or `2`; the tester may not edit it on this branch. Prefer validating in the store, or in a `saveProfileChecked` wrapper, so the repository stays a plain storage layer. Otherwise those M4 tests need valid fixtures.
+
+### 67. `wholeDollarShares` and the engine default
+
+- **What:** The setting defaults to `true`, matching the engine's `roundMemberShares` default. A missing setting therefore behaves the same as an omitted option.
+- **Resolution:** No change. The tests check that `{ wholeDollarShares: true }` equals the engine's default output, and that the setting has no effect with rounding off.
+- **Tests:** `customProfiles › "Whole-dollar shares for each person" setting … › *`.
+
+---
+
 ## Coverage map vs. the brief
 
 | Brief item                                                              | Where                                                                      |
@@ -449,3 +564,7 @@ Each item below gives **what**, **why**, a **proposed resolution**, and the **af
 | M4: default-profile seeding                                             | `src/db/__tests__/seed.test.ts`                                            |
 | M4: profiles / shifts / coworkers / settings repositories               | `src/db/__tests__/repositories.test.ts`                                    |
 | M4: saved shifts are snapshots (incl. fast-check round-trip)            | `src/db/__tests__/snapshot.test.ts`                                        |
+| M5: pure profile helpers                                                | `src/lib/__tests__/profiles.test.ts`                                       |
+| M5: `checkProfile` codes, ordering, error-free ⇒ engine never throws    | `src/lib/__tests__/profileValidation.test.ts`                              |
+| M5: schema v2 (rule labels) migration from v1                           | `src/db/__tests__/migrations-v2.test.ts`                                   |
+| M5: editor-style profiles end to end, `wholeDollarShares` path          | `src/engine/__tests__/customProfiles.test.ts`                              |
