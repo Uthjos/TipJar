@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
-import { Alert } from 'react-native';
+import { router } from 'expo-router';
 
 import { calculateShift } from '@/engine/calculate';
 import { buildShiftInput, selectProfile, useShiftStore } from '@/store/shiftStore';
@@ -94,17 +94,15 @@ describe('manual flow screens', () => {
     expect(screen.getByLabelText('Add Joseph as bartender')).toBeTruthy();
   });
 
-  it('History lists saved shifts and confirms before deleting', async () => {
-    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  it('History lists the saved shifts in the period and opens one (delete is on the detail, M7)', async () => {
     seedGolden();
     const state = useShiftStore.getState();
     const profile = selectProfile(state);
     const input = buildShiftInput(state.draft, profile);
     await state.saveShift(input, calculateShift(input, profile).result);
     await render(<HistoryScreen />);
-    await fireEvent.press(screen.getByLabelText('Delete'));
-    expect(alert).toHaveBeenCalledWith('Delete this shift?', expect.any(String), expect.any(Array));
-    expect(useShiftStore.getState().savedShifts).toHaveLength(1);
-    alert.mockRestore();
+    const id = useShiftStore.getState().savedShifts[0]!.id;
+    await fireEvent.press(screen.getByLabelText(/^Shift on /));
+    expect(router.push).toHaveBeenCalledWith(`/history/${id}`);
   });
 });

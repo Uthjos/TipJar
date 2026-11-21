@@ -91,6 +91,21 @@ export function renameRolePatch(
   return builtIn ? { role: id, label: '' } : { role: id, label: text.trim() };
 }
 
+/**
+ * Role label resolver across all current profiles (M7 History / CSV): a custom role's label from
+ * whichever profile defines it, else the built-in plural label.
+ */
+export function roleLabelFrom(profiles: TipOutProfile[]): (role: RoleId) => string {
+  const labels = new Map<RoleId, string>();
+  for (const p of profiles) {
+    for (const r of p.rules) {
+      const label = r.label?.trim();
+      if (label && !labels.has(r.role)) labels.set(r.role, label);
+    }
+  }
+  return (role) => labels.get(role) ?? roleLabel(role);
+}
+
 function copyRule(rule: TipOutRule): TipOutRule {
   return { ...rule };
 }

@@ -13,6 +13,7 @@ import {
   Screen,
   ToggleRow,
 } from '@/components/ui';
+import { formatShiftDate } from '@/lib/format';
 import { selectProfile, useShiftStore } from '@/store/shiftStore';
 import { spacing } from '@/theme';
 
@@ -20,7 +21,7 @@ export default function NewShiftScreen() {
   const draft = useShiftStore((s) => s.draft);
   const profiles = useShiftStore((s) => s.profiles);
   const profile = useShiftStore(selectProfile);
-  const { setMoney, setDate, setRoundToDollar, setProfile } = useShiftStore.getState();
+  const { setMoney, setDate, setRoundToDollar, setProfile, resetDraft } = useShiftStore.getState();
 
   const today = format(new Date(), 'yyyy-MM-dd');
   const yesterday = format(subDays(new Date(), 1), 'yyyy-MM-dd');
@@ -42,6 +43,15 @@ export default function NewShiftScreen() {
         />
       }
     >
+      {draft.editingShiftId ? (
+        <Card>
+          <Banner kind="info">
+            Editing your saved shift from {formatShiftDate(draft.date)}. Saving updates it.
+          </Banner>
+          {draft.editingNote ? <Banner kind="warning">{draft.editingNote}</Banner> : null}
+          <Button variant="ghost" label="Cancel edit" onPress={resetDraft} />
+        </Card>
+      ) : null}
       <Card>
         <Field label="I'm checking out as">
           <ChipRow

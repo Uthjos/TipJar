@@ -91,7 +91,7 @@ payoutsCsv(shifts: SavedShift[], opts?: { roleLabel?: (role: RoleId) => string }
   (oldest first, then `savedAt`).
 - **shiftsCsv** columns, in order:
   `date, profile, user_role, total_tips, net_sales, food_sales, tipped_out, kept, you_earned,
-  retained, rounding_adjustment, kept_change, rounded_to_dollar, shift_id`
+retained, rounding_adjustment, kept_change, rounded_to_dollar, shift_id`
   — money via `centsToCsv`; `profile` = profile name or the id if unknown;
   `rounded_to_dollar` = `yes` / `no`.
 - **payoutsCsv**: one row per paid member and one per role with no members (e.g. kitchen) or a
