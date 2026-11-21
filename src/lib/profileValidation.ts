@@ -10,6 +10,7 @@ export type ProfileIssueCode =
   | 'NAME_REQUIRED'
   | 'NAME_TAKEN'
   | 'POOL_PERCENT_RANGE'
+  | 'POOL_PERCENT_ZERO'
   | 'NO_RULES'
   | 'NO_SHARE_RULE'
   | 'RULE_ROLE_REQUIRED'
@@ -58,6 +59,13 @@ export function checkProfile(p: TipOutProfile, others: TipOutProfile[]): Profile
   }
   if (!inRange(p.totalTipOutPercentOfTips)) {
     error('POOL_PERCENT_RANGE', 'The tip-out percentage must be between 0 and 100.');
+  } else if (p.totalTipOutPercentOfTips === 0) {
+    // Allowed, but nothing would ever be tipped out (review round 5, #58).
+    issues.push({
+      code: 'POOL_PERCENT_ZERO',
+      severity: 'warning',
+      message: 'The tip-out percentage is 0%, so nothing will be tipped out.',
+    });
   }
   if (p.rules.length === 0) {
     error('NO_RULES', 'Add at least one role to tip out.');

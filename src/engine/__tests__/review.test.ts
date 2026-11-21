@@ -290,3 +290,33 @@ describe('review round 3: ZERO_SHARE_AFTER_ROUNDING only when there was $1 to sp
     expect(w?.message).toContain('Hannah');
   });
 });
+
+describe('review round 5: REMAINDER_UNALLOCATED (#60)', () => {
+  const kitchenOnly: TipOutProfile = {
+    id: 'k',
+    name: 'Kitchen only',
+    appliesTo: 'server',
+    totalTipOutPercentOfTips: 30,
+    rules: [{ role: 'kitchen', type: 'percentOfBasis', basis: 'foodSales', percent: 2 }],
+  };
+  // Tips $400 -> pool $120; KTO 2% of $800 food = $16 -> $104 goes to nobody.
+  const input = shiftInput({ totalTips: 40000, netSales: 100000, foodSales: 80000 });
+
+  it.each([false, true])('warns with the unallocated amount (rounding %p)', (roundToDollar) => {
+    const { result, warnings } = calculateShift({ ...input, roundToDollar }, kitchenOnly);
+    expect(result.pool).toBe(1600);
+    const w = warnings.find((x) => x.code === 'REMAINDER_UNALLOCATED');
+    expect(w?.message).toContain('$104.00');
+    expect(w?.message).toContain('stays with you');
+  });
+
+  it('no warning when the carve-outs use the whole pool or a share rule exists', () => {
+    const full = { ...kitchenOnly, totalTipOutPercentOfTips: 4 }; // pool $16 = KTO $16
+    expect(calculateShift(input, full).warnings.map((w) => w.code)).not.toContain(
+      'REMAINDER_UNALLOCATED',
+    );
+    expect(calculateShift(input, SERVER_DEFAULT_PROFILE).warnings.map((w) => w.code)).not.toContain(
+      'REMAINDER_UNALLOCATED',
+    );
+  });
+});

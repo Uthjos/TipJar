@@ -37,6 +37,8 @@ export class EngineValidationError extends Error {
  * - POOL_EXCEEDS_TIPS: a sales-based pool (profile.poolBasis) came to more than total tips; capped.
  * - ZERO_SHARE_AFTER_ROUNDING: named members (or bartenders sharing kept tips) whose whole-dollar
  *   share is $0 (owner Q8). Allowed; shown as a note on Results.
+ * - REMAINDER_UNALLOCATED: the profile has no shareOfRemainder rule, so part of the pool after the
+ *   carve-outs goes to nobody and stays in `kept` (review round 5, #60).
  * At most one warning per code is returned.
  */
 export type EngineWarningCode =
@@ -46,6 +48,7 @@ export type EngineWarningCode =
   | 'UNUSED_TEAM_MEMBERS'
   | 'PROFILE_ROLE_MISMATCH'
   | 'POOL_EXCEEDS_TIPS'
-  | 'ZERO_SHARE_AFTER_ROUNDING';
+  | 'ZERO_SHARE_AFTER_ROUNDING'
+  | 'REMAINDER_UNALLOCATED';
 
 export type EngineWarning = { code: EngineWarningCode; message: string };

@@ -35,8 +35,10 @@ beforeEach(async () => {
 });
 
 describe('migrate', () => {
-  it('SCHEMA_VERSION is 1 for milestone 4', () => {
-    expect(SCHEMA_VERSION).toBe(1);
+  // Review round 5 (#66): M5 added the profile_rules.label migration (v2). The v1 -> v2 upgrade
+  // itself is covered by migrations-v2.test.ts; bump this when a migration is added.
+  it('SCHEMA_VERSION is the current version (2 since milestone 5)', () => {
+    expect(SCHEMA_VERSION).toBe(2);
   });
 
   it('a fresh database starts empty (test adapter sanity)', async () => {

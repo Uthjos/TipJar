@@ -48,8 +48,11 @@ export function roleIdFromLabel(label: string): RoleId {
   return BUILT_IN_ALIASES.get(id) ?? id;
 }
 
-/** Display name for a rule's role: its label if present, else the built-in label. */
-export function displayRole(rule: Pick<TipOutRule, 'role' | 'label'>): string {
+/**
+ * Display name for a rule's role: its label if present, else the built-in label. Takes a full
+ * `TipOutRule` (contract) or just `{ role, label }`.
+ */
+export function displayRole(rule: TipOutRule | Pick<TipOutRule, 'role' | 'label'>): string {
   const label = rule.label?.trim();
   return label ? label : roleLabel(rule.role);
 }

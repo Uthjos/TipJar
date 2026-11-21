@@ -312,6 +312,18 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
     });
   },
   saveProfile: async (profile) => {
+    // #44 can't be bypassed by editing: the last profile for a role can't switch roles (#65).
+    const before = get().profiles.find((p) => p.id === profile.id);
+    if (
+      before &&
+      before.appliesTo !== profile.appliesTo &&
+      !get().profiles.some((p) => p.id !== profile.id && p.appliesTo === before.appliesTo)
+    ) {
+      throw new StoreActionError(
+        'LAST_PROFILE_FOR_ROLE',
+        `This is your only ${before.appliesTo} profile, so it has to stay a ${before.appliesTo} profile. Create another ${before.appliesTo} profile first.`,
+      );
+    }
     const issues = checkProfile(profile, get().profiles);
     if (hasErrors(issues)) {
       const first = issues.find((i) => i.severity === 'error')!;
@@ -336,8 +348,12 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
         `This is your only ${target.appliesTo} profile, so it can't be deleted. Edit it instead, or create another ${target.appliesTo} profile first.`,
       );
     }
-    // Built-in first, then the first remaining in list order.
-    const fallback = sameRole.find((p) => isBuiltInProfile(p.id)) ?? sameRole[0]!;
+    // Built-in first, then the first remaining by name (review round 5, #65).
+    const fallback =
+      sameRole.find((p) => isBuiltInProfile(p.id)) ??
+      [...sameRole].sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+      )[0]!;
     if (db) {
       await repo.deleteProfile(db, id);
       set({ profiles: await repo.listProfiles(db) });
@@ -446,12 +462,19 @@ export function engineOptions(settings: AppSettings): { roundMemberShares: boole
   return { roundMemberShares: settings.wholeDollarShares };
 }
 
-/** Onboarding shows when not onboarded and there are no saved shifts (m5 contract). */
+/**
+ * Onboarding shows when not onboarded and there are no saved shifts (m5 contract), and only once
+ * data has loaded: a failed hydrate looks like "no shifts" and must not trigger it (review round 5,
+ * #64). `settings.onboarded` is set from a strict `=== true` check on hydrate.
+ */
 export function needsOnboarding(state: {
+  status: LoadStatus;
   settings: AppSettings;
   savedShifts: SavedShift[];
 }): boolean {
-  return !state.settings.onboarded && state.savedShifts.length === 0;
+  return (
+    state.status === 'ready' && state.settings.onboarded !== true && state.savedShifts.length === 0
+  );
 }
 
 export function selectProfile(state: { draft: DraftShift; profiles: TipOutProfile[] }) {

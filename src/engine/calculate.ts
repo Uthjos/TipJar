@@ -3,7 +3,7 @@
  */
 import { EngineValidationError, type EngineWarning } from './errors';
 import { memberHours } from './hours';
-import { floorToDollar, splitLargestRemainder, splitWholeDollars } from './money';
+import { floorToDollar, formatCents, splitLargestRemainder, splitWholeDollars } from './money';
 import type {
   Cents,
   KeptSplitEntry,
@@ -372,6 +372,19 @@ export function calculateShift(
     shareAmounts = dollars
       .slice(carveExact.length, carveExact.length + shareExact.length)
       .map((d) => d * 100);
+  }
+
+  // With no shareOfRemainder rule, whatever the carve-outs leave of the pool goes to nobody and
+  // stays in `kept`; say so (review round 5, #60). No result field, just a warning.
+  if (shareRules.length === 0) {
+    const allocatedPool = rounding ? flooredPool : poolCents;
+    const unallocated = allocatedPool - carveAmounts.reduce((a, b) => a + b, 0);
+    if (unallocated > 0) {
+      warnings.push({
+        code: 'REMAINDER_UNALLOCATED',
+        message: `${formatCents(unallocated)} of the tip-out pool has no role to share it, so it stays with ${input.userRole === 'bartender' ? 'the bar' : 'you'}.`,
+      });
+    }
   }
 
   // --- 5. assemble roles ----------------------------------------------------
