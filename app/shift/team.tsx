@@ -2,46 +2,108 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Body, Button, Card, Input, Muted, Screen, Segmented, Title } from '@/components/ui';
-import { roleNames } from '@/lib/profiles';
+import {
+  Banner,
+  Body,
+  Button,
+  Card,
+  Input,
+  Muted,
+  Screen,
+  Segmented,
+  Title,
+} from '@/components/ui';
 import type { RoleId, TeamMember } from '@/engine/types';
-import { quickAddCoworkers, selectProfile, teamRolesFor, useShiftStore } from '@/store/shiftStore';
+import {
+  checkTeamHours,
+  clockHours,
+  formatHours,
+  type HoursIssue,
+  parseHoursInput,
+  parseTimeInput,
+} from '@/lib/hoursInput';
+import { roleNames } from '@/lib/profiles';
+import {
+  placeholderName,
+  quickAddCoworkers,
+  selectProfile,
+  teamRolesFor,
+  typedTeam,
+  useShiftStore,
+} from '@/store/shiftStore';
 import { font, MIN_TAP, radius, spacing, useColors } from '@/theme';
 
 function singular(role: RoleId) {
   return roleNames(selectProfile(useShiftStore.getState()), role).singular.toLowerCase();
 }
 
-type HoursMode = 'hours' | 'clock';
+const TIME_HINT = 'e.g. 5pm, 17:00, 1730';
 
-function MemberRow({ member, placeholder }: { member: TeamMember; placeholder: string }) {
+function MemberRow({
+  member,
+  placeholder,
+  issues,
+  roleCount,
+}: {
+  member: TeamMember;
+  placeholder: string;
+  /** This member's hours issues (checkTeamHours). */
+  issues: HoursIssue[];
+  /** How many people are in this member's role. */
+  roleCount: number;
+}) {
   const c = useColors();
-  const { updateMember, removeMember } = useShiftStore.getState();
-  const hasHours =
-    member.hours !== undefined || member.clockIn !== undefined || member.clockOut !== undefined;
-  const [open, setOpen] = useState(hasHours);
-  const [mode, setMode] = useState<HoursMode>(
-    member.clockIn || member.clockOut ? 'clock' : 'hours',
-  );
-  const [hoursText, setHoursText] = useState(
-    member.hours !== undefined ? String(member.hours) : '',
-  );
+  const { updateMember, removeMember, setTyped, copyHoursToRole } = useShiftStore.getState();
+  const typed = useShiftStore((s) => s.draft.typed[member.id]);
+  const who = member.name.trim() || placeholder;
 
-  const switchMode = (m: HoursMode) => {
-    setMode(m);
-    // Only one source of hours at a time.
-    setHoursText('');
+  const hoursText = typed?.hoursText ?? (member.hours !== undefined ? String(member.hours) : '');
+  const clockInText = typed?.clockInText ?? member.clockIn ?? '';
+  const clockOutText = typed?.clockOutText ?? member.clockOut ?? '';
+  const hasEntry =
+    hoursText.trim() !== '' || clockInText.trim() !== '' || clockOutText.trim() !== '';
+  const mode =
+    typed?.mode ??
+    (member.clockIn !== undefined || member.clockOut !== undefined ? 'clock' : 'hours');
+
+  const [userOpen, setUserOpen] = useState(false);
+  // Opens by itself when the member has hours or a problem to fix.
+  const open = userOpen || hasEntry || issues.length > 0;
+  const hasError = issues.some((i) => i.severity === 'error');
+  const span =
+    mode === 'clock' && member.clockIn && member.clockOut
+      ? clockHours(member.clockIn, member.clockOut)
+      : null;
+  const canCopy = hasEntry && !hasError && roleCount >= 2;
+
+  const clearAll = () =>
     updateMember(member.id, { hours: undefined, clockIn: undefined, clockOut: undefined });
+
+  const switchMode = (m: 'hours' | 'clock') => {
+    // Only one source of hours at a time.
+    setTyped(member.id, { mode: m, hoursText: '', clockInText: '', clockOutText: '' });
+    clearAll();
+    setUserOpen(true);
   };
 
   const clearHours = () => {
-    setHoursText('');
-    updateMember(member.id, { hours: undefined, clockIn: undefined, clockOut: undefined });
-    setOpen(false);
+    setTyped(member.id, { mode: undefined, hoursText: '', clockInText: '', clockOutText: '' });
+    clearAll();
+    setUserOpen(false);
+  };
+
+  const onClock = (field: 'clockIn' | 'clockOut', text: string) => {
+    setTyped(member.id, field === 'clockIn' ? { clockInText: text } : { clockOutText: text });
+    // Commit only a normalised "HH:mm" (never ISO); anything unreadable stays uncommitted.
+    updateMember(member.id, { [field]: parseTimeInput(text) ?? undefined });
+  };
+  const normaliseClock = (field: 'clockIn' | 'clockOut', text: string) => {
+    const t = parseTimeInput(text);
+    if (t) setTyped(member.id, field === 'clockIn' ? { clockInText: t } : { clockOutText: t });
   };
 
   return (
-    <View style={[styles.member, { borderColor: c.border }]}>
+    <View style={[styles.member, { borderColor: hasError ? c.danger : c.border }]}>
       <View style={styles.memberTop}>
         <Input
           accessibilityLabel={`${singular(member.role)} name`}
@@ -54,7 +116,7 @@ function MemberRow({ member, placeholder }: { member: TeamMember; placeholder: s
         />
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Remove ${member.name || placeholder}`}
+          accessibilityLabel={`Remove ${who}`}
           onPress={() => removeMember(member.id)}
           style={[styles.iconBtn, { backgroundColor: c.surfaceAlt }]}
         >
@@ -65,8 +127,8 @@ function MemberRow({ member, placeholder }: { member: TeamMember; placeholder: s
       {!open ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Add hours for ${member.name || placeholder}`}
-          onPress={() => setOpen(true)}
+          accessibilityLabel={`Add hours for ${who}`}
+          onPress={() => setUserOpen(true)}
           style={styles.linkBtn}
         >
           <Text style={{ color: c.primary, fontSize: font.label, fontWeight: '600' }}>
@@ -86,44 +148,84 @@ function MemberRow({ member, placeholder }: { member: TeamMember; placeholder: s
           />
           {mode === 'hours' ? (
             <Input
-              accessibilityLabel={`Hours worked by ${member.name || placeholder}`}
+              accessibilityLabel={`Hours worked by ${who}`}
               value={hoursText}
               onChangeText={(t) => {
-                setHoursText(t);
-                const n = Number(t.replace(',', '.'));
-                updateMember(member.id, {
-                  hours: t.trim() === '' || !Number.isFinite(n) ? undefined : n,
-                });
+                setTyped(member.id, { hoursText: t });
+                updateMember(member.id, { hours: parseHoursInput(t) ?? undefined });
               }}
-              placeholder="e.g. 6.5"
+              onEndEditing={() => {
+                const h = parseHoursInput(hoursText);
+                if (h !== null) setTyped(member.id, { hoursText: String(h) });
+              }}
+              placeholder="e.g. 6.5 or 6:30"
               keyboardType="decimal-pad"
               inputMode="decimal"
             />
           ) : (
-            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-              <Input
-                accessibilityLabel={`Clock in time for ${member.name || placeholder}`}
-                value={member.clockIn ?? ''}
-                onChangeText={(t) => updateMember(member.id, { clockIn: t.trim() || undefined })}
-                placeholder="In 17:00"
-                keyboardType="numbers-and-punctuation"
-                style={{ flex: 1 }}
-              />
-              <Input
-                accessibilityLabel={`Clock out time for ${member.name || placeholder}`}
-                value={member.clockOut ?? ''}
-                onChangeText={(t) => updateMember(member.id, { clockOut: t.trim() || undefined })}
-                placeholder="Out 01:30"
-                keyboardType="numbers-and-punctuation"
-                style={{ flex: 1 }}
-              />
+            <View style={{ gap: spacing.xs }}>
+              <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+                <Input
+                  accessibilityLabel={`Clock in time for ${who}`}
+                  value={clockInText}
+                  onChangeText={(t) => onClock('clockIn', t)}
+                  onEndEditing={() => normaliseClock('clockIn', clockInText)}
+                  placeholder="In 5pm"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="numbers-and-punctuation"
+                  style={{ flex: 1 }}
+                />
+                <Input
+                  accessibilityLabel={`Clock out time for ${who}`}
+                  value={clockOutText}
+                  onChangeText={(t) => onClock('clockOut', t)}
+                  onEndEditing={() => normaliseClock('clockOut', clockOutText)}
+                  placeholder="Out 1:30am"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="numbers-and-punctuation"
+                  style={{ flex: 1 }}
+                />
+              </View>
+              {span ? (
+                <Body style={{ fontWeight: '600' }}>
+                  = {formatHours(span.hours)}
+                  {span.overnight ? ' · ends next day' : ''}
+                </Body>
+              ) : (
+                <Muted>{TIME_HINT}</Muted>
+              )}
             </View>
           )}
-          <Pressable accessibilityRole="button" onPress={clearHours} style={styles.linkBtn}>
-            <Text style={{ color: c.textMuted, fontSize: font.label }}>
-              Clear hours (split evenly)
+          {issues.map((i) => (
+            <Text
+              key={`${i.code}-${i.message}`}
+              accessibilityRole="alert"
+              style={{ color: i.severity === 'error' ? c.danger : c.warning, fontSize: font.small }}
+            >
+              {i.message}
             </Text>
-          </Pressable>
+          ))}
+          <View style={styles.links}>
+            {canCopy ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Same hours for everyone in this role as ${who}`}
+                onPress={() => copyHoursToRole(member.id)}
+                style={styles.linkBtn}
+              >
+                <Text style={{ color: c.primary, fontSize: font.label, fontWeight: '600' }}>
+                  Same for everyone in this role
+                </Text>
+              </Pressable>
+            ) : null}
+            <Pressable accessibilityRole="button" onPress={clearHours} style={styles.linkBtn}>
+              <Text style={{ color: c.textMuted, fontSize: font.label }}>
+                Clear hours (split evenly)
+              </Text>
+            </Pressable>
+          </View>
         </View>
       )}
     </View>
@@ -139,11 +241,38 @@ export default function TeamScreen() {
   const quickAdd = quickAddCoworkers(coworkers, draft.team, roles);
   const c = useColors();
 
+  // Check what was typed (with placeholder names so messages read well), before Results.
+  const issues = checkTeamHours(
+    typedTeam(draft).map((m) => ({
+      ...m,
+      name: m.name.trim() || placeholderName(draft.team, m, profile),
+    })),
+    roles,
+  );
+  const errorCount = issues.filter((i) => i.severity === 'error').length;
+
   return (
-    <Screen footer={<Button label="See tip-out" onPress={() => router.push('/shift/results')} />}>
+    <Screen
+      footer={
+        <>
+          {errorCount > 0 ? (
+            <Banner kind="error">
+              {errorCount === 1
+                ? 'Fix 1 hours problem above to see the tip-out.'
+                : `Fix ${errorCount} hours problems above to see the tip-out.`}
+            </Banner>
+          ) : null}
+          <Button
+            label="See tip-out"
+            onPress={() => router.push('/shift/results')}
+            disabled={errorCount > 0}
+          />
+        </>
+      }
+    >
       <Muted>
-        Add everyone who worked. Leave hours blank to split evenly — use 24h times like 17:00 for
-        clock in/out (overnight shifts are fine).
+        Add everyone who worked. Leave hours blank to split evenly, or enter total hours or clock in
+        / out times like 5pm or 17:00 (overnight shifts are fine).
       </Muted>
       {quickAdd.length > 0 ? (
         <Card>
@@ -191,6 +320,8 @@ export default function TeamScreen() {
                   key={m.id}
                   member={m}
                   placeholder={`${roleNames(profile, role).singular} ${i + 1}`}
+                  issues={issues.filter((x) => x.memberId === m.id)}
+                  roleCount={members.length}
                 />
               ))
             )}
@@ -222,6 +353,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   linkBtn: { minHeight: 44, justifyContent: 'center' },
+  links: { flexDirection: 'row', flexWrap: 'wrap', columnGap: spacing.lg },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   chip: {
     minHeight: 48,

@@ -32,8 +32,10 @@ Not in scope: remembering a coworker's usual hours, time pickers / native clock 
 ```ts
 parseTimeInput(text: string): string | null
 ```
+
 Returns a normalised 24h `"HH:mm"` (zero-padded) or `null` if it isn't a time. Accepts, case- and
 space-insensitive:
+
 - `H`, `HH` → whole hour, 24h (`9` → `09:00`, `17` → `17:00`, `0` → `00:00`; `24` → null).
 - `H:mm`, `HH:mm`, and `H.mm` / `HH.mm` (`5.30` → `05:30`).
 - `Hmm` / `HHmm` with 3–4 digits (`930` → `09:30`, `1730` → `17:30`).
@@ -46,6 +48,7 @@ space-insensitive:
 ```ts
 parseHoursInput(text: string): number | null
 ```
+
 Total hours as a number, or null. Accepts `6`, `6.5`, `6,5` (comma decimal), `6:30` (h:mm → 6.5),
 `6h`, `6h30`, `6h 30m`, `6 hrs`, `45m` / `45 min` (→ 0.75), `.5`. Result rounded to 2 decimals.
 Must be > 0 and ≤ 24; anything else (incl. 0, negative, > 24) → null.
@@ -53,12 +56,14 @@ Must be > 0 and ≤ 24; anything else (incl. 0, negative, > 24) → null.
 ```ts
 clockHours(clockIn: string, clockOut: string): { hours: number; overnight: boolean } | null
 ```
+
 For two `HH:mm` values: minutes between them, +24h when `clockOut` < `clockIn` (`overnight: true`),
 hours rounded to 2 decimals. Equal times → null (matches engine `INVALID_CLOCK`). Invalid → null.
 
 ```ts
 formatHours(h: number): string
 ```
+
 `6` → `"6 h"`, `6.5` → `"6.5 h"`, `6.25` → `"6.25 h"`, `0.75` → `"0.75 h"`, never trailing zeros,
 max 2 decimals.
 
@@ -82,6 +87,7 @@ checkTeamHours(
   rolesThatSplit: RoleId[],
 ): HoursIssue[]
 ```
+
 - Works on what the user **typed** (the `*Text` fields, when present) so problems show before
   values are committed; falls back to `hours` / `clockIn` / `clockOut`.
 - `rolesThatSplit` = the profile's roles that have named members, plus `bartender` in the
@@ -97,6 +103,7 @@ checkTeamHours(
 ```ts
 copyHoursToRole(team: TeamMember[], fromMemberId: string): TeamMember[]
 ```
+
 Returns a new team where every other member **with the same role** gets the source member's
 `hours`, `clockIn`, `clockOut` (exactly one source of hours: the other fields cleared). Members in
 other roles untouched; inputs never mutated; unknown id → unchanged copy.

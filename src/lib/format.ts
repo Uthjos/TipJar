@@ -1,6 +1,7 @@
 import { format, parseISO } from 'date-fns';
 
 import { formatCents } from '@/engine/money';
+import { formatHours } from '@/lib/hoursInput';
 import { roleNames } from '@/lib/profiles';
 import type { Basis, ShiftInput, ShiftResult, TipOutProfile } from '@/engine/types';
 
@@ -63,6 +64,11 @@ export function heldBackNote(heldBack: number): string {
   return `${formatCents(heldBack)} kept back — tied hours`;
 }
 
+/** " (6.5 h)" after a name when that member's hours were entered (M6); '' otherwise. */
+function hoursSuffix(hours: number): string {
+  return hours > 0 ? ` (${formatHours(hours)})` : '';
+}
+
 /** Plain-text summary to paste into a group chat. `profile` (optional) names custom roles. */
 export function buildShareText(
   input: ShiftInput,
@@ -85,7 +91,9 @@ export function buildShareText(
       else lines.push(`${roleLabel(r.role)}: nobody on shift (share given to other roles)`);
       continue;
     }
-    const members = r.members.map((m) => `${m.name} ${formatCents(m.amount)}`).join(', ');
+    const members = r.members
+      .map((m) => `${m.name}${hoursSuffix(m.hours)} ${formatCents(m.amount)}`)
+      .join(', ');
     const held = r.heldBack ? ` (${heldBackNote(r.heldBack)})` : '';
     lines.push(
       `${roleLabel(r.role)}: ${formatCents(r.amount)}${held}${members ? ` — ${members}` : ''}`,
@@ -93,7 +101,9 @@ export function buildShareText(
   }
   if (input.userRole === 'bartender') {
     lines.push(`Bar keeps: ${formatCents(keptShown(result))}`);
-    for (const k of result.keptSplit ?? []) lines.push(`  ${k.name} ${formatCents(k.amount)}`);
+    for (const k of result.keptSplit ?? []) {
+      lines.push(`  ${k.name}${hoursSuffix(k.hours)} ${formatCents(k.amount)}`);
+    }
     if (hasChangeNote(result)) {
       lines.push(`(${changeNote(result.keptChange, result.keptHeldBack)})`);
     }
