@@ -1,7 +1,7 @@
 import type { Db } from './types';
 
-/** Current schema version (milestone 4). */
-export const SCHEMA_VERSION = 1;
+/** Current schema version (v1: milestone 4; v2: milestone 5 custom role labels). */
+export const SCHEMA_VERSION = 2;
 
 /**
  * Ordered migrations. `MIGRATIONS[i]` upgrades the schema from version i to i + 1.
@@ -86,6 +86,11 @@ const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
+  // v2 (milestone 5): display label for custom roles. Nullable; existing rows keep NULL
+  // (built-in roles have no label).
+  `
+  ALTER TABLE profile_rules ADD COLUMN label TEXT;
+  `,
 ];
 
 async function currentVersion(db: Db): Promise<number> {
@@ -99,10 +104,14 @@ async function currentVersion(db: Db): Promise<number> {
 /**
  * Create / upgrade tables to SCHEMA_VERSION and record the version. Idempotent: calling it on an
  * up-to-date database does nothing. Returns the resulting version.
+ *
+ * `toVersion` (default SCHEMA_VERSION) stops at an older version, e.g. to build a real v1
+ * database in tests before upgrading it. It never downgrades.
  */
-export async function migrate(db: Db): Promise<number> {
+export async function migrate(db: Db, toVersion: number = SCHEMA_VERSION): Promise<number> {
+  const target = Math.min(toVersion, MIGRATIONS.length);
   let version = await currentVersion(db);
-  while (version < MIGRATIONS.length) {
+  while (version < target) {
     const sql = MIGRATIONS[version]!;
     const next = version + 1;
     await db.withTransactionAsync(async () => {

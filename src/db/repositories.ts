@@ -62,18 +62,23 @@ interface RuleRow {
   basis: string | null;
   percent: number | null;
   weight: number | null;
+  /** Schema v2; null for built-in roles. */
+  label?: string | null;
 }
 
 function toRule(r: RuleRow): TipOutRule {
-  if (r.type === 'percentOfBasis') {
-    return {
-      role: r.role,
-      type: 'percentOfBasis',
-      basis: (r.basis ?? 'totalTips') as Basis,
-      percent: r.percent ?? 0,
-    };
-  }
-  return { role: r.role, type: 'shareOfRemainder', weight: r.weight ?? 0 };
+  const rule: TipOutRule =
+    r.type === 'percentOfBasis'
+      ? {
+          role: r.role,
+          type: 'percentOfBasis',
+          basis: (r.basis ?? 'totalTips') as Basis,
+          percent: r.percent ?? 0,
+        }
+      : { role: r.role, type: 'shareOfRemainder', weight: r.weight ?? 0 };
+  // A missing label round-trips as absent, not null (m5 contract).
+  if (r.label) rule.label = r.label;
+  return rule;
 }
 
 function toProfile(row: ProfileRow, rules: RuleRow[]): TipOutProfile {
@@ -141,8 +146,9 @@ export async function saveProfile(db: Db, profile: TipOutProfile): Promise<void>
     await db.runAsync('DELETE FROM profile_rules WHERE profile_id = ?', [profile.id]);
     for (const [i, rule] of profile.rules.entries()) {
       await db.runAsync(
-        `INSERT INTO profile_rules (profile_id, position, role, type, basis, percent, weight)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO profile_rules
+           (profile_id, position, role, type, basis, percent, weight, label)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           profile.id,
           i,
@@ -151,6 +157,7 @@ export async function saveProfile(db: Db, profile: TipOutProfile): Promise<void>
           rule.type === 'percentOfBasis' ? rule.basis : null,
           rule.type === 'percentOfBasis' ? rule.percent : null,
           rule.type === 'shareOfRemainder' ? rule.weight : null,
+          rule.label?.trim() ? rule.label : null,
         ],
       );
     }
@@ -436,8 +443,13 @@ export async function deleteCoworker(db: Db, id: string): Promise<void> {
  * quick-add or flip their usual role.
  */
 export async function rememberTeam(db: Db, team: TeamMember[], date: string): Promise<void> {
+  // #50: if the same name appears twice in one team, only the first occurrence is remembered.
+  const seen = new Set<string>();
   for (const m of team) {
     if (m.isUser || !m.name || m.name.trim() === '') continue;
+    const key = coworkerKey(m.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
     const existing = await db.getFirstAsync<{ id: string; last_worked: string | null }>(
       'SELECT id, last_worked FROM coworkers WHERE name_key = ? ORDER BY id LIMIT 1',
       [coworkerKey(m.name)],

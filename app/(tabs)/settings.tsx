@@ -1,33 +1,220 @@
-import { Body, Card, Muted, Screen, Title } from '@/components/ui';
-import { roleLabel } from '@/engine/profiles';
-import { basisLabel } from '@/lib/format';
-import { useShiftStore } from '@/store/shiftStore';
+import { router } from 'expo-router';
+import { useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-/** Stub: profile editing, saved coworkers and CSV export arrive in later milestones. */
+import { confirmAction, showError } from '@/components/confirm';
+import {
+  Body,
+  Button,
+  Card,
+  ChipRow,
+  Input,
+  Muted,
+  Screen,
+  Title,
+  ToggleRow,
+} from '@/components/ui';
+import type { Coworker } from '@/db/repositories';
+import type { RoleId, TipOutProfile } from '@/engine/types';
+import { profileSummary, roleNames } from '@/lib/profiles';
+import { useShiftStore } from '@/store/shiftStore';
+import { font, MIN_TAP, radius, spacing, useColors } from '@/theme';
+
+function ProfileRow({ profile, isDefault }: { profile: TipOutProfile; isDefault: boolean }) {
+  const c = useColors();
+  const forWhom = profile.appliesTo === 'bartender' ? 'For bartenders' : 'For servers';
+  return (
+    <View style={[styles.row, { borderColor: c.border }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Edit ${profile.name}`}
+        accessibilityHint={profileSummary(profile)}
+        onPress={() => router.push(`/profile/${profile.id}`)}
+        style={({ pressed }) => [{ minHeight: MIN_TAP, opacity: pressed ? 0.7 : 1 }]}
+      >
+        <Body style={{ fontWeight: '700' }}>
+          {profile.name}
+          {isDefault ? <Muted> · default</Muted> : null}
+        </Body>
+        <Muted>{forWhom}</Muted>
+        <Muted>{profileSummary(profile)}</Muted>
+      </Pressable>
+      <Button
+        compact
+        variant="ghost"
+        label="Duplicate"
+        accessibilityHint={`Makes a copy of ${profile.name}`}
+        onPress={() => router.push(`/profile/new?from=${encodeURIComponent(profile.id)}`)}
+      />
+    </View>
+  );
+}
+
+function CoworkerRow({ coworker, roles }: { coworker: Coworker; roles: RoleId[] }) {
+  const c = useColors();
+  const [name, setName] = useState(coworker.name);
+  const { renameCoworker, setCoworkerRole, deleteCoworker } = useShiftStore.getState();
+  const profile = useShiftStore((s) =>
+    s.profiles.find((p) => p.rules.some((r) => r.role === coworker.usualRole)),
+  );
+  const roleOptions = (
+    roles.includes(coworker.usualRole) ? roles : [...roles, coworker.usualRole]
+  ).map((r) => ({ value: r, label: roleNames(profile, r).singular }));
+
+  const commitName = async () => {
+    if (name.trim() === coworker.name) return;
+    try {
+      await renameCoworker(coworker.id, name);
+    } catch (e) {
+      setName(coworker.name);
+      showError('Could not rename', e);
+    }
+  };
+
+  return (
+    <View style={[styles.row, { borderColor: c.border }]}>
+      <View style={styles.rowTop}>
+        <Input
+          accessibilityLabel={`Name of ${coworker.name}`}
+          value={name}
+          onChangeText={setName}
+          onEndEditing={commitName}
+          onSubmitEditing={commitName}
+          returnKeyType="done"
+          autoCapitalize="words"
+          style={{ flex: 1 }}
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Delete ${coworker.name}`}
+          onPress={() =>
+            confirmAction(
+              `Delete ${coworker.name}?`,
+              'They will no longer show up in quick add. Saved shifts are not changed.',
+              'Delete',
+              () => {
+                deleteCoworker(coworker.id).catch((e: unknown) => showError('Could not delete', e));
+              },
+            )
+          }
+          style={[styles.iconBtn, { backgroundColor: c.surfaceAlt }]}
+        >
+          <Text style={{ color: c.danger, fontSize: 20, fontWeight: '700' }}>✕</Text>
+        </Pressable>
+      </View>
+      <ChipRow
+        accessibilityLabel={`Usual role for ${coworker.name}`}
+        value={coworker.usualRole}
+        onChange={(role) =>
+          setCoworkerRole(coworker.id, role).catch((e: unknown) =>
+            showError('Could not change role', e),
+          )
+        }
+        options={roleOptions}
+      />
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const profiles = useShiftStore((s) => s.profiles);
+  const settings = useShiftStore((s) => s.settings);
+  const coworkers = useShiftStore((s) => s.coworkers);
+  const { setRoundToDollar, setDefaultProfile, setWholeDollarShares } = useShiftStore.getState();
+
+  // Every role any profile tips out (custom ones included), for coworkers' usual role.
+  const roles: RoleId[] = ['bartender'];
+  for (const p of profiles) {
+    for (const r of p.rules)
+      if (r.role && r.role !== 'kitchen' && !roles.includes(r.role)) roles.push(r.role);
+  }
+
   return (
     <Screen>
       <Card>
-        <Title>Settings</Title>
-        <Muted>Editing tip-out profiles, saved coworkers and export are coming soon.</Muted>
+        <Title>Tip-out profiles</Title>
+        <Muted>Tap a profile to change its percentages and roles.</Muted>
+        {profiles.map((p) => (
+          <ProfileRow key={p.id} profile={p} isDefault={p.id === settings.defaultProfileId} />
+        ))}
+        <View style={styles.buttons}>
+          <Button
+            variant="secondary"
+            label="+ New server profile"
+            onPress={() => router.push('/profile/new?appliesTo=server')}
+            style={{ flex: 1 }}
+          />
+          <Button
+            variant="secondary"
+            label="+ New bartender profile"
+            onPress={() => router.push('/profile/new?appliesTo=bartender')}
+            style={{ flex: 1 }}
+          />
+        </View>
       </Card>
-      {profiles.map((p) => (
-        <Card key={p.id}>
-          <Body style={{ fontWeight: '700' }}>{p.name}</Body>
+
+      <Card>
+        <Title>Defaults</Title>
+        <ToggleRow
+          label="Round to nearest dollar"
+          hint="Rounds down — tip-out never exceeds your tips"
+          value={settings.defaultRoundToDollar}
+          onValueChange={setRoundToDollar}
+        />
+        <ToggleRow
+          label="Whole-dollar shares for each person"
+          hint={
+            settings.defaultRoundToDollar
+              ? 'Split each role and the bar in whole dollars; leftover cents stay with you / the bar'
+              : 'Only applies when rounding to the nearest dollar is on'
+          }
+          value={settings.wholeDollarShares}
+          onValueChange={setWholeDollarShares}
+          disabled={!settings.defaultRoundToDollar}
+        />
+        <Body style={{ fontWeight: '600' }}>Default profile</Body>
+        <ChipRow
+          accessibilityLabel="Default profile"
+          value={settings.defaultProfileId}
+          onChange={setDefaultProfile}
+          options={profiles.map((p) => ({
+            value: p.id,
+            label: p.name,
+            hint: p.appliesTo === 'bartender' ? 'Bartender' : 'Server',
+          }))}
+        />
+      </Card>
+
+      <Card>
+        <Title>Saved coworkers</Title>
+        {coworkers.length === 0 ? (
           <Muted>
-            Tip-out pool: {p.totalTipOutPercentOfTips}% of {basisLabel(p.poolBasis)}
+            People you add on &quot;Who worked&quot; are remembered here after you save a shift.
           </Muted>
-          {p.rules.map((r) => (
-            <Muted key={r.role}>
-              {roleLabel(r.role)}:{' '}
-              {r.type === 'percentOfBasis'
-                ? `${r.percent}% of ${basisLabel(r.basis)} (taken first)`
-                : `weight ${r.weight} of the remainder`}
-            </Muted>
-          ))}
-        </Card>
-      ))}
+        ) : (
+          coworkers.map((cw) => <CoworkerRow key={cw.id} coworker={cw} roles={roles} />)
+        )}
+      </Card>
+      <Muted style={{ textAlign: 'center', fontSize: font.small }}>
+        Everything stays on this device.
+      </Muted>
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  row: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: spacing.sm,
+    gap: spacing.xs,
+  },
+  rowTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  iconBtn: {
+    width: MIN_TAP,
+    height: MIN_TAP,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+});

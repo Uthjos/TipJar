@@ -69,6 +69,8 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="shift/team" options={{ title: 'Who worked' }} />
         <Stack.Screen name="shift/results" options={{ title: 'Results' }} />
+        <Stack.Screen name="profile/[id]" options={{ title: 'Profile' }} />
+        <Stack.Screen name="onboarding" options={{ title: 'Welcome', gestureEnabled: false }} />
       </Stack>
     </ThemeProvider>
   );

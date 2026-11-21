@@ -1,8 +1,8 @@
 import { format, parseISO } from 'date-fns';
 
 import { formatCents } from '@/engine/money';
-import { roleLabel } from '@/engine/profiles';
-import type { Basis, ShiftInput, ShiftResult } from '@/engine/types';
+import { roleNames } from '@/lib/profiles';
+import type { Basis, ShiftInput, ShiftResult, TipOutProfile } from '@/engine/types';
 
 /** 'netSales' -> "net sales". Used to label a profile's pool % with its basis (finding #27). */
 export function basisLabel(basis: Basis | undefined): string {
@@ -63,8 +63,13 @@ export function heldBackNote(heldBack: number): string {
   return `${formatCents(heldBack)} kept back — tied hours`;
 }
 
-/** Plain-text summary to paste into a group chat. */
-export function buildShareText(input: ShiftInput, result: ShiftResult): string {
+/** Plain-text summary to paste into a group chat. `profile` (optional) names custom roles. */
+export function buildShareText(
+  input: ShiftInput,
+  result: ShiftResult,
+  profile?: TipOutProfile,
+): string {
+  const roleLabel = (role: string) => roleNames(profile, role).plural;
   const lines: string[] = [];
   lines.push(`TipJar — ${formatShiftDate(input.date)}`);
   lines.push(

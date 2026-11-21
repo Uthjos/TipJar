@@ -6,8 +6,8 @@ import { Alert, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { Banner, Body, Button, Card, Muted, Screen, Segmented, Title } from '@/components/ui';
 import { calculateShift, EngineValidationError } from '@/engine/calculate';
 import { formatCents } from '@/engine/money';
-import { roleLabel } from '@/engine/profiles';
-import type { MissingRoleHandling, RoleResult, ShiftInput } from '@/engine/types';
+import { roleNames } from '@/lib/profiles';
+import type { MissingRoleHandling, RoleResult, ShiftInput, TipOutProfile } from '@/engine/types';
 import {
   buildShareText,
   changeNote,
@@ -19,17 +19,19 @@ import {
   roundingParts,
 } from '@/lib/format';
 import { userEarnings, userKeptEntry } from '@/lib/earnings';
-import { buildShiftInput, selectProfile, useShiftStore } from '@/store/shiftStore';
+import { buildShiftInput, engineOptions, selectProfile, useShiftStore } from '@/store/shiftStore';
 import { font, MIN_TAP, spacing, useColors } from '@/theme';
 
 function RoleRow({
   role,
+  profile,
   totalTips,
   userRole,
   handling,
   onHandlingChange,
 }: {
   role: RoleResult;
+  profile: TipOutProfile;
   totalTips: number;
   userRole: ShiftInput['userRole'];
   handling: MissingRoleHandling;
@@ -38,7 +40,7 @@ function RoleRow({
   const c = useColors();
   const [open, setOpen] = useState(false);
   const expandable = role.members.length > 0;
-  const label = roleLabel(role.role);
+  const label = roleNames(profile, role.role).plural;
 
   if (role.missing) {
     return (
@@ -115,19 +117,20 @@ export default function ResultsScreen() {
   const c = useColors();
   const draft = useShiftStore((s) => s.draft);
   const profile = useShiftStore(selectProfile);
+  const settings = useShiftStore((s) => s.settings);
   const { setMissingRoleHandling, saveShift, resetDraft } = useShiftStore.getState();
   const [saving, setSaving] = useState(false);
 
   const computed = useMemo(() => {
     const input = buildShiftInput(draft, profile);
     try {
-      const { result, warnings } = calculateShift(input, profile);
+      const { result, warnings } = calculateShift(input, profile, engineOptions(settings));
       return { ok: true as const, input, result, warnings };
     } catch (e) {
       if (e instanceof EngineValidationError) return { ok: false as const, message: e.message };
       throw e;
     }
-  }, [draft, profile]);
+  }, [draft, profile, settings]);
 
   if (!computed.ok) {
     return (
@@ -139,7 +142,7 @@ export default function ResultsScreen() {
 
   const { input, result, warnings } = computed;
   const isBartender = input.userRole === 'bartender';
-  const shareText = buildShareText(input, result);
+  const shareText = buildShareText(input, result, profile);
   // Bartender flow with whole-dollar rounding: the headline is the whole dollars actually shared.
   const keptShown = keptShownFor(result);
   // Floor trim and tie-held dollars are shown as separate notes (review round 3, #37).
@@ -278,6 +281,7 @@ export default function ResultsScreen() {
           <RoleRow
             key={r.role}
             role={r}
+            profile={profile}
             totalTips={input.totalTips}
             userRole={input.userRole}
             handling={draft.missingRoleHandling}
