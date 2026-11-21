@@ -423,3 +423,92 @@ None new. Still open from §11: Q6 (cloud backup / accounts).
 - `npx prettier --check .`: all files formatted.
 - `npx expo export --platform android`: bundled. One Hermes bundle (`entry-….hbc`, 3 MB), exported to the scratchpad.
 - `git status`: clean. Nothing pushed.
+
+---
+
+# Round 6: milestone 6
+
+Main started at `0e752bf`, which added `docs/m6-contract.md`. I read it before merging. Nothing was pushed.
+
+## R6.1 Merges
+
+| Step                            | Commit    | What                                                                                                                     |
+| ------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Merge `feat/m6-hours` (--no-ff) | `2eec266` | See the list below the table. 51 implementer tests.                                                                      |
+| Merge `test/m6-hours` (--no-ff) | `ddd8b47` | `hoursInput.test` (154), `teamHours.test` (28), `src/test-support/hoursFixtures.ts`; findings #68–#80.                   |
+| Decisions                       | `57056c9` | Engine fix for #78, message changes for #72 and #74, the property extended to kitchen, review tests, contract decisions. |
+
+`feat/m6-hours` adds:
+
+- `src/lib/hoursInput.ts`;
+- store support: a `typed` draft field, `typedTeam`, `setTyped`, `copyHoursToRole`;
+- on Who worked: normalising on blur, a live hours line, issues listed per member, a banner with the button disabled while there are errors, and "Same for everyone";
+- hours on the Results bar-split rows and in the share text.
+
+After both merges:
+
+- **798 passed, 0 failed** (35 suites).
+- Lint, typecheck and Prettier clean.
+- No conflicts.
+
+## R6.2 Triage
+
+Nothing failed after the merge. The stub-vs-real differences I expected on edge parse forms (#68–#70, #77) didn't appear: the real parser matched every form the tester encoded.
+
+Extending the tester's key property to kitchen members (instructed, #78) reproduced the gap before the fix. A kitchen member with a bad clock passed `checkTeamHours`, then `calculateShift` threw `INVALID_CLOCK`. After the engine fix the property passes, 1500 runs.
+
+Totals: 0 implementation bugs and 0 test bugs found by merging. 1 implementation gap found by review (#78, now fixed). 0 judgment calls.
+
+## R6.3 Findings #68–#80
+
+| #   | Finding                                              | Disposition                                    | Notes                                                                                                                                                                                                                                                                                                                                        |
+| --- | ---------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 68  | 12-hour edge forms and `1200`                        | **Recorded** (contract kept)                   | `0pm`, `0am`, `00:00pm` and `0:30am` are null. `1200` is noon. `1730pm` is null. The hint text shows the 24h reading. I didn't add `0:30am`, because it wasn't in your decision list.                                                                                                                                                        |
+| 69  | Whitespace inside input                              | **Accepted** (already implemented)             | Both parsers strip all whitespace. Tests added (`5 : 30`, `17 30`, `6 h 30 m`, `4 5 min`).                                                                                                                                                                                                                                                   |
+| 70  | One-digit minutes                                    | **Recorded** (keep rejecting)                  | `5:3`, `5.3`, `5.5` → null. Tested.                                                                                                                                                                                                                                                                                                          |
+| 71  | `PARTIAL_HOURS` and members with errors              | **Recorded** (contract kept)                   | Only valid hours trigger `PARTIAL_HOURS`.                                                                                                                                                                                                                                                                                                    |
+| 72  | Zero hours                                           | **Accepted** (changed)                         | Still `INVALID_HOURS`. The message now ends with "Enter hours above 0, or remove them from the team." Tested.                                                                                                                                                                                                                                |
+| 73  | Range check before or after rounding                 | **Confirmed**                                  | After rounding, so `0.001` → null.                                                                                                                                                                                                                                                                                                           |
+| 74  | `LONG_SHIFT` at 16 h                                 | **Recorded** (changed wording)                 | Fires above 16 h, warning only. Message: "That's a long shift for Allen (17 h) — double-check the times." Tested.                                                                                                                                                                                                                            |
+| 75  | Blank typed text                                     | **Confirmed**                                  | Present but blank means cleared, with no fallback to that field's committed value.                                                                                                                                                                                                                                                           |
+| 76  | Hours text vs clock text                             | **Accepted** (already implemented)             | Total hours win, as in the engine. Tests cover both directions.                                                                                                                                                                                                                                                                              |
+| 77  | Several problems on one member                       | **Accepted** (already implemented)             | One `INVALID_TIME` per unreadable field, clock-in first. Tested.                                                                                                                                                                                                                                                                             |
+| 78  | Kitchen members bypass the checks but not the engine | **Accepted** (engine fix)                      | `calculateShift` resolves hours only for split roles: profile roles except never-missing ones, plus bartenders in the bartender flow. Kitchen members, and members of roles outside the profile, are never validated. New test with four kinds of bad kitchen entry (the result equals Golden 1). The property now includes kitchen members. |
+| 79  | `copyHoursToRole` and pending typed text             | **Verified** (already implemented); test added | The store replaces the other same-role members' typed text with only the source's mode. A stale `abc` can't override the copied hours, and other roles are untouched.                                                                                                                                                                        |
+| 80  | `clockHours` strict `HH:mm`                          | **Confirmed**                                  | Callers must run `parseTimeInput` first.                                                                                                                                                                                                                                                                                                     |
+
+Counts (13 findings):
+
+- **Accepted 5:** #69, #72, #76, #77, #78. Two were behaviour changes (#72, #78); three were already implemented (#69, #76, #77).
+- **Verified 1:** #79.
+- **Confirmed 3:** #73, #75, #80.
+- **Recorded 4:** #68, #70, #71, #74. #74 also got the new wording.
+- **Rejected 0.**
+
+The implementer's interpretations are all accepted:
+
+- `PARTIAL_HOURS` counts only valid hours.
+- Committed 0 hours is `INVALID_HOURS`.
+- Hours text is normalised on blur.
+- "Same for everyone" switches the panel mode.
+
+## R6.4 Doc edits
+
+- `docs/m6-contract.md`: added "Decisions (main-branch review, round 6)", covering the #78 engine rule, parsing rules, `checkTeamHours` rules, store behaviour, and the implementer's interpretations.
+- CLAUDE.md: not edited.
+
+## R6.5 Owner decisions
+
+None new. Still open from §11: Q6 (cloud backup / accounts).
+
+## R6.6 Final check output (main @ HEAD)
+
+- `npm test`: **37 suites, 815 tests passed, 0 failed**.
+  - engine project: 34 suites, 803 tests.
+  - ui project: 3 suites, 12 tests.
+  - Round 6 added 17 tests: 16 in `src/lib/__tests__/review.m6.test.ts` and 1 in `src/store/__tests__/review.m6.test.ts`. The `teamHours` property now covers kitchen members.
+- `npm run lint`: 0 errors, 0 warnings.
+- `npm run typecheck`: clean.
+- `npx prettier --check .`: all files formatted.
+- `npx expo export --platform android`: bundled. One Hermes bundle (`entry-….hbc`, 3 MB), exported to the scratchpad.
+- `git status`: clean. Nothing pushed.
