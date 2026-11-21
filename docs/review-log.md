@@ -536,3 +536,106 @@ The diff is limited to that component, plus a 2-test regression file, `src/__tes
 - `npx prettier --check .`: clean.
 - `npx expo export --platform android`: bundled.
 - `git status`: clean. Nothing pushed.
+
+---
+
+# Round 7: milestone 7
+
+Main started at `b27d3d6`, which added `docs/m7-contract.md`. I read it before merging. Nothing was pushed.
+
+## R7.1 Merges
+
+| Step                              | Commit    | What                                                                                           |
+| --------------------------------- | --------- | ---------------------------------------------------------------------------------------------- |
+| Merge `feat/m7-history` (--no-ff) | `f6aecab` | See the list below the table.                                                                  |
+| Merge `test/m7-history` (--no-ff) | `a22bc02` | `history.test` (55), `csv.test` (42), `historyFixtures.ts`; findings #81–#92.                  |
+| Decisions                         | `fa2a4de` | `displayPeriodLabel` for #81, csvEscape test update for #88, review tests, contract decisions. |
+
+`feat/m7-history` adds:
+
+- new dependencies: gifted-charts, svg, linear-gradient, file-system, sharing, tslib;
+- `src/lib/history.ts` and `src/lib/csv.ts`;
+- `ShiftResultView`, shared by Results and shift detail;
+- the History tab with its chart;
+- the `app/history/[id]` shift detail screen, with edit that updates the saved shift;
+- CSV share, and the `weekStartsOn` setting.
+
+After both merges, with `npm ci`:
+
+- **Tests:** 928 passed, 1 failed (929, 43 suites).
+- **Lint and Prettier:** clean.
+- **Typecheck:** one error. The gitignored, generated `.expo/types/router.d.ts` predated the new `/history/[id]` route. I regenerated it with expo-router's `regenerateDeclarations`, as in round 5. This is an environment issue only; there was no code change.
+
+## R7.2 Triage
+
+| Failure                                                                         | Category                                    | Resolution                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `csv › csvEscape › any string round-trips through the parser as a single field` | (b) test predates decision #88 (instructed) | The counterexample was `"@"`. Under #88, text starting with `= + - @` gets a leading `'`, so the property now expects that prefix and an exact round-trip otherwise. Added explicit cases: `=SUM(A1)`, `+1`, `-5`, `@cmd`, `=a,b` (prefixed and quoted), and `a=b` (unchanged). This is not a weakening: the property still checks every string, with the prefix made explicit. |
+
+**Payouts row semantics (#85 vs implementer interpretation 1).** No test failed. The tester compared rows as sets and didn't assert $0 rows. The sum property (`paid + role = tipped_out`, `bar_split + kept_change = kept`) holds under the implementer's rules. I kept those rules and pinned them in new tests, Golden 2 exact rows plus the $0 cases:
+
+- `paid` rows appear even at $0;
+- `role` rows appear even at $0;
+- `retained` rows appear only when > 0;
+- `bar_split` rows include the user;
+- `role` and `retained` rows have a blank name;
+- the role column holds the label.
+
+Totals: 0 implementation bugs, 1 test predating a decision (#88), 0 judgment calls, plus 1 environment issue (stale route types).
+
+**Android export.** The first `npx expo export --platform android` after the new native dependencies printed a transient `Error: Unable to deserialize cloned data.` from a Metro worker, but still produced the bundle. A clean rerun exited 0 with no errors and a 3.7 MB Hermes bundle. I treated it as a first-run Metro cache/worker issue.
+
+## R7.3 Findings #81–#92
+
+| #   | Finding                                   | Disposition                                          | Notes                                                                                                                                                                                                                                   |
+| --- | ----------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 81  | Week labels always include the year       | **Accepted** (changed, small)                        | New pure `displayPeriodLabel(range, today)` used for the History heading: "Nov 15 – 21", "November" in the current year. Other years, year ranges and weeks spanning two years keep the full label. `periodRange` is unchanged. Tested. |
+| 82  | Average per shift, not per hour           | **Recorded**                                         | Per shift, rounded half-up (`Math.floor(x + 0.5)`). Per hour would need a "my hours" field.                                                                                                                                             |
+| 83  | What counts as "where your tip-outs went" | **Confirmed**                                        | Only paid role and member amounts. Retained, rounding, `keptChange` and `keptSplit` are excluded. The tester's tests cover it.                                                                                                          |
+| 84  | `byCoworker` details                      | **Confirmed** (implementer behaviour); tests aligned | Order-independent (shifts sorted internally), most recent spelling, roles in first-seen order. Each shift is counted **once** per person, including a $0 share in a paid role. Two new tests pin the once-per-shift and $0-share cases. |
+| 85  | `payoutsCsv` columns and row order        | **Resolved toward the implementer**                  | See R7.2. Row order: profile rule order, members in team order, then `bar_split`.                                                                                                                                                       |
+| 86  | Payouts don't reconcile to total tips     | **Recorded**                                         | Kept money has no payout row. The shifts file is the reconciliation view.                                                                                                                                                               |
+| 87  | CSV locale and BOM                        | **Done; verified**                                   | The BOM is added only in `shareCsv` (the file writer). New test with mocked `expo-file-system` and `expo-sharing`: the written file starts with U+FEFF, and the builder output doesn't. Decimals stay `.`.                              |
+| 88  | Formula injection                         | **Done; verified**                                   | `'` prefix on strings starting with `= + - @`. Numbers, money and hours bypass it, so `-0.05` is not prefixed. Tests updated (R7.2).                                                                                                    |
+| 89  | Period of an edited shift                 | **Recorded**                                         | Follows the edited `input.date` and keeps the original `savedAt`.                                                                                                                                                                       |
+| 90  | "Today" for the current period            | **Done; verified**                                   | `todayIso()` is `format(new Date(), 'yyyy-MM-dd')`, the local date. A fake-timer test at local 23:30 and 00:15 confirms it. Used for the History anchor, the next-limit and the New Shift default.                                      |
+| 91  | Hours in the payouts file                 | **Recorded**                                         | Blank when 0 or not entered, otherwise up to 2 decimals.                                                                                                                                                                                |
+| 92  | `isUser` on a tip-out member              | **Recorded**                                         | The coworker reconciliation identity holds only when no `isUser` member is paid.                                                                                                                                                        |
+
+Counts (12 findings):
+
+- **Accepted 1:** #81.
+- **Done and verified 3:** #87, #88, #90.
+- **Confirmed 2:** #83, #84.
+- **Resolved toward the implementer 1:** #85.
+- **Recorded 5:** #82, #86, #89, #91, #92.
+- **Rejected 0.**
+
+**Implementer's open items.**
+
+- Switching tabs mid-edit keeps the edit. Left as is; the banner with **Cancel edit** is acceptable.
+- Chart bars can't be focused individually. Noted for M9 (accessibility).
+
+## R7.4 Doc edits
+
+- `docs/m7-contract.md`: added "Decisions (main-branch review, round 7)", covering local today, display labels, averages, the `byRole`/`byCoworker` rules, CSV escaping, the BOM, the payout row table, reconciliation and the UI notes.
+- CLAUDE.md: not edited.
+
+## R7.5 Owner decisions
+
+None new. Still open from §11: Q6 (cloud backup / accounts).
+
+## R7.6 Final check output (main @ HEAD)
+
+- `npm test`: **45 suites, 946 tests passed, 0 failed**.
+  - engine project: 40 suites, 929 tests.
+  - ui project: 5 suites, 17 tests.
+  - Round 7 added 17 tests:
+    - 10 in `src/lib/__tests__/review.m7.test.ts`;
+    - 1 in `src/export/__tests__/shareCsv.test.ts`;
+    - 6 explicit `csvEscape` cases for #88 in `csv.test.ts`.
+- `npm run lint`: 0 errors, 0 warnings.
+- `npm run typecheck`: clean, after regenerating the typed-routes file.
+- `npx prettier --check .`: all files formatted.
+- `npx expo export --platform android`: bundled, 3.7 MB Hermes bundle, clean rerun exit 0.
+- `git status`: clean. Nothing pushed.
