@@ -639,3 +639,101 @@ None new. Still open from §11: Q6 (cloud backup / accounts).
 - `npx prettier --check .`: all files formatted.
 - `npx expo export --platform android`: bundled, 3.7 MB Hermes bundle, clean rerun exit 0.
 - `git status`: clean. Nothing pushed.
+
+---
+
+# Round 8: milestone 8
+
+Main started at `762d173`, which added `docs/m8-contract.md`. I read it before merging. Nothing was pushed, and no Gradle/Android native build was run.
+
+## R8.1 Merges
+
+| Step                           | Commit    | What                                                                                                                               |
+| ------------------------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Merge `feat/m8-scan` (--no-ff) | `9df429e` | See the list below the table.                                                                                                      |
+| Merge `test/m8-scan` (--no-ff) | `ecefe72` | `money.test` (57), `parseReceipt.test` (61), `samples.test` (116), 13 fixtures in `src/test-support/receipts/`; findings #93–#106. |
+| Decisions                      | `4b9148b` | The #100 note, the `gratuity` labels test for #94, the Expo Go safety test, contract decisions.                                    |
+
+`feat/m8-scan` (`7dbf707` + `7cdfb85`) adds:
+
+- `src/ocr/`: types, labels with an `EXACT` map, money parsing, `parseReceipt`, and `recognize.ts`;
+- new packages: `expo-dev-client`, `expo-image-picker`, and `@infinitered/react-native-mlkit-text-recognition` 5.0.1;
+- `app.json` plugin, permissions, and the `com.tipjar.app` app id;
+- the npm `android` / `ios` scripts changed to `expo run:*`;
+- `app/scan.tsx`, with the confirm step, scanned-field highlighting, and an Expo Go fallback message.
+
+After both merges, with `npm ci`:
+
+- **Tests:** 1215 passed, 1 failed (1216, 51 suites).
+- **Lint, typecheck and Prettier:** clean.
+- **Conflicts:** none.
+
+## R8.2 Triage
+
+| Failure                                                                                                   | Category                                    | Resolution                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parseReceipt › labels config (data only) › has an entry for every POS with the generic minimum synonyms` | (b) test predates decision #94 (instructed) | It expected bare `gratuity` among the generic total-tips synonyms. Under #94 that synonym was dropped: on real reports "Gratuity" mostly labels auto-gratuity or service-charge lines, which #97 ignores, not tips collected. The test keeps every other required synonym and now also asserts that `gratuity` is **absent**. That is a positive check of the decision, not a weakening. |
+
+Totals: 0 implementation bugs, 1 test predating a decision (#94), 0 judgment calls. Matching the implementer's local run, the other 266 of the tester's 267 tests passed against the real parser.
+
+**Expo Go safety (step 3).**
+
+- `recognize.ts` checks for the module with `requireOptionalNativeModule` and requires the ML Kit package lazily, only inside `recognizeImage` after that check.
+- No app or src module imports the package at module load.
+- The existing implementer test already checks `isOcrAvailable() === false` without the module.
+- I added `src/ocr/__tests__/review.m8.test.ts`, which mocks the package so requiring it throws, as in Expo Go. It checks that `recognize.ts` still imports, that `isOcrAvailable()` is false, and that `recognizeImage` rejects with the dev-build message.
+
+**Android export.** Metro printed "Error while reading cache, falling back to a full crawl: Unable to deserialize cloned data." (its file-map cache, as in round 7). It then bundled normally and exited 0, producing a 3.8 MB Hermes bundle. The warning is benign.
+
+## R8.3 Findings #93–#106
+
+| #   | Finding                                           | Disposition                             | Notes                                                                                                                                                                                                                                                                                  |
+| --- | ------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 93  | Fixtures are not real receipts                    | **Recorded**                            | Add real ML Kit output as fixtures when the owner supplies photos. Keep the current fixtures as regression tests.                                                                                                                                                                      |
+| 94  | Bare "Tips" / "Gratuity"                          | **Applied** (implementer)               | `tips` counts only as the whole label. `gratuity` dropped. `net tips`, `tips paid`, `tips due` and `tip pool` are ignored. Labels test updated (R8.2).                                                                                                                                 |
+| 95  | Aloha "Charge Tips"                               | **Applied**                             | `charge tips` added for Aloha and generic.                                                                                                                                                                                                                                             |
+| 96  | Next-line fallback stealing another label's value | **Applied**                             | The fallback skips label and ignore lines.                                                                                                                                                                                                                                             |
+| 97  | Service charges and auto-gratuity                 | **Applied**                             | Those lines are ignored.                                                                                                                                                                                                                                                               |
+| 98  | Tips with tip-outs already taken off              | **Applied**                             | Card + cash beats a bare "Tips" total, and net/owed tips are ignored.                                                                                                                                                                                                                  |
+| 99  | Where each POS puts food sales                    | **Recorded as a follow-up** (not built) | No category-mapping setting. The current section rule is "anywhere after a category header" and never ends. It wasn't bounded, because the implementer has no stop rule to keep. Defining a bound (next header or tips section, or about 15 lines) belongs with the mapping follow-up. |
+| 100 | Several servers on one report                     | **Accepted** (changed, small)           | A note when `Server:` / `Employee:` / `Team member:` headers name more than one **different** person. Detected on the raw text, because normalisation strips the colon. Two tests.                                                                                                     |
+| 101 | How confidences combine                           | **Applied**                             | The lowest confidence wins.                                                                                                                                                                                                                                                            |
+| 102 | Which synonyms are looser                         | **Recorded** (covered by `EXACT`)       | Exactness is data in `labels.ts`.                                                                                                                                                                                                                                                      |
+| 103 | Scope of the ignore list                          | **Applied**                             | Ignore lines are skipped for every field.                                                                                                                                                                                                                                              |
+| 104 | Money-token edge cases                            | **Recorded**                            | European formats, three decimals and `%` are out of scope.                                                                                                                                                                                                                             |
+| 105 | Positional matching without a match               | **Confirmed**                           | Same row only, with no fallback when coordinates are given (implementer choice 2).                                                                                                                                                                                                     |
+| 106 | Notes on a clean receipt                          | **Confirmed**                           | Empty notes on a clean receipt.                                                                                                                                                                                                                                                        |
+
+Counts (14 findings):
+
+- **Applied by the implementer, recorded in the contract 7:** #94, #95, #96, #97, #98, #101, #103.
+- **Accepted, new code 1:** #100.
+- **Confirmed 2:** #105, #106.
+- **Recorded 4:** #93, #99 (follow-up), #102, #104.
+- **Rejected 0.**
+
+The implementer's choices 1–5 are accepted and recorded.
+
+## R8.4 Doc edits
+
+- `docs/m8-contract.md`: added "Decisions (main-branch review, round 8)". It covers the library choice and Expo Go guard, the label/matching decisions, the implementer's choices, notes (#100, #106), and the recorded follow-ups (#93, #99, #104, #105).
+- CLAUDE.md: not edited.
+
+## R8.5 Owner decisions
+
+- **Still wanted:** sample photos of real Toast, Square and Aloha reports (Q10, #93).
+- **For later:** whether to add a food-category mapping setting (#99).
+- **Still open from §11:** Q6 (cloud backup / accounts).
+
+## R8.6 Final check output (main @ HEAD)
+
+- `npm test`: **52 suites, 1219 tests passed, 0 failed**.
+  - engine project: 46 suites, 1199 tests.
+  - ui project: 6 suites, 20 tests.
+  - Round 8 added 3 tests in `src/ocr/__tests__/review.m8.test.ts`.
+- `npm run lint`: 0 errors, 0 warnings.
+- `npm run typecheck`: clean.
+- `npx prettier --check .`: all files formatted.
+- `npx expo export --platform android`: bundled, exit 0, 3.8 MB Hermes bundle.
+- No Gradle build was run.
+- `git status`: clean. Nothing pushed.
