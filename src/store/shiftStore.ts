@@ -37,6 +37,10 @@ export interface DraftShift {
    * checkTeamHours can flag problems before they're committed. Not saved with the shift.
    */
   typed: Record<string, TypedHours>;
+  /** M7: set while editing a saved shift; saving then updates that shift instead of adding one. */
+  editingShiftId?: string;
+  /** M7 (#54): shown on Results when the saved shift's profile was deleted. */
+  editingNote?: string;
 }
 
 /** Raw hours input for one member, plus which entry mode their panel shows. */
@@ -89,6 +93,8 @@ export interface AppSettings {
   /** "Whole-dollar shares for each person" (#21); passed to the engine as roundMemberShares. */
   wholeDollarShares: boolean;
   onboarded: boolean;
+  /** History weeks start on Sunday (0, default) or Monday (1). */
+  weekStartsOn: 0 | 1;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -96,6 +102,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultProfileId: 'server-default',
   wholeDollarShares: true,
   onboarded: false,
+  weekStartsOn: 0,
 };
 
 /** A store action the user asked for that can't be done; `message` is shown to them. */
@@ -153,7 +160,14 @@ interface ShiftState {
    */
   saveShift: (input: ShiftInput, result: ShiftResult, team?: TeamMember[]) => Promise<void>;
   deleteShift: (id: string) => Promise<void>;
+  /** A fresh draft from the default settings (also ends editing a saved shift). */
   resetDraft: () => void;
+  /**
+   * M7: load a saved shift's input into the draft and edit it. If its profile was deleted (#54),
+   * uses the current default profile for its role and sets `draft.editingNote`.
+   */
+  startEditShift: (shift: SavedShift) => void;
+  setWeekStartsOn: (day: 0 | 1) => void;
 
   // --- profiles (milestone 5) ---
   /** Unsaved new profile for `appliesTo`, copied from that role's built-in, with a unique name. */
@@ -172,6 +186,8 @@ interface ShiftState {
 
   // --- settings ---
   setDefaultProfile: (profileId: string) => void;
+  /** Settings' rounding default (also the draft's, unless a saved shift is being edited). */
+  setDefaultRoundToDollar: (on: boolean) => void;
   setWholeDollarShares: (on: boolean) => void;
   /** Onboarding step 1: use `role`'s built-in profile as the default. */
   chooseOnboardingRole: (role: UserRole) => void;
@@ -207,6 +223,7 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
       profileId,
       wholeDollarShares,
       onboarded,
+      weekStartsOn,
       coworkers,
       savedShifts,
     ] = await Promise.all([
@@ -215,6 +232,7 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
       repo.getSetting(db, 'defaultProfileId', DEFAULT_SETTINGS.defaultProfileId),
       repo.getSetting(db, 'wholeDollarShares', DEFAULT_SETTINGS.wholeDollarShares),
       repo.getSetting(db, 'onboarded', DEFAULT_SETTINGS.onboarded),
+      repo.getSetting<number>(db, 'weekStartsOn', DEFAULT_SETTINGS.weekStartsOn),
       repo.listCoworkers(db),
       repo.listShifts(db),
     ]);
@@ -233,6 +251,7 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
         defaultProfileId: startProfile,
         wholeDollarShares,
         onboarded: onboarded === true || skipOnboarding,
+        weekStartsOn: weekStartsOn === 1 ? 1 : 0,
       },
       draft: freshDraft(startProfile, roundToDollar),
       status: 'ready',
@@ -246,6 +265,11 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
   setMoney: (field, value) => set((s) => ({ draft: { ...s.draft, [field]: value } })),
   setDate: (date) => set((s) => ({ draft: { ...s.draft, date } })),
   setRoundToDollar: (on) => {
+    // Editing a saved shift changes that shift only, not the default.
+    if (get().draft.editingShiftId) {
+      set((s) => ({ draft: { ...s.draft, roundToDollar: on } }));
+      return;
+    }
     set((s) => ({
       draft: { ...s.draft, roundToDollar: on },
       settings: { ...s.settings, defaultRoundToDollar: on },
@@ -255,7 +279,9 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
     );
   },
   setProfile: (profileId) => {
-    if (get().settings.defaultProfileId !== profileId) {
+    // Editing a saved shift changes that shift only, not the default.
+    const editing = !!get().draft.editingShiftId;
+    if (!editing && get().settings.defaultProfileId !== profileId) {
       persistQuietly(get().db, (db) =>
         repo.setSetting(db, repo.SETTINGS.defaultProfileId.key, profileId),
       );
@@ -274,7 +300,7 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
       }
       return {
         draft: { ...s.draft, profileId, team },
-        settings: { ...s.settings, defaultProfileId: profileId },
+        settings: editing ? s.settings : { ...s.settings, defaultProfileId: profileId },
       };
     });
   },
@@ -318,6 +344,13 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
     const db = get().db;
     if (!db) {
       // No database (UI tests / failed open): keep it for this session only.
+      const editingId = get().draft.editingShiftId;
+      if (editingId) {
+        set((s) => ({
+          savedShifts: s.savedShifts.map((x) => (x.id === editingId ? { ...x, input, result } : x)),
+        }));
+        return;
+      }
       set((s) => ({
         savedShifts: [
           { id: newId('shift'), savedAt: new Date().toISOString(), input, result },
@@ -326,7 +359,9 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
       }));
       return;
     }
-    await repo.saveShift(db, { input, result });
+    const editingId = get().draft.editingShiftId;
+    if (editingId) await repo.updateShift(db, editingId, { input, result });
+    else await repo.saveShift(db, { input, result });
     await repo.rememberTeam(db, team, input.date);
     const [savedShifts, coworkers] = await Promise.all([
       repo.listShifts(db),
@@ -340,9 +375,46 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
     set((s) => ({ savedShifts: s.savedShifts.filter((x) => x.id !== id) }));
   },
   resetDraft: () => {
-    const { draft } = get();
-    set({ draft: freshDraft(draft.profileId, draft.roundToDollar) });
-    get().setProfile(draft.profileId);
+    const { settings, profiles } = get();
+    const profileId = profiles.some((p) => p.id === settings.defaultProfileId)
+      ? settings.defaultProfileId
+      : profiles[0]!.id;
+    set({ draft: freshDraft(profileId, settings.defaultRoundToDollar) });
+    get().setProfile(profileId);
+  },
+  startEditShift: (shift) => {
+    const { profiles, settings } = get();
+    const { input } = shift;
+    let profile = profiles.find((p) => p.id === input.profileId);
+    let editingNote: string | undefined;
+    if (!profile) {
+      // #54: the shift's profile was deleted; use the current default for its role.
+      const sameRole = profiles.filter((p) => p.appliesTo === input.userRole);
+      profile =
+        sameRole.find((p) => p.id === settings.defaultProfileId) ??
+        sameRole.find((p) => isBuiltInProfile(p.id)) ??
+        sameRole[0] ??
+        profiles[0]!;
+      editingNote = `The profile this shift used was deleted, so it was recalculated with ${profile.name}.`;
+    }
+    const draft: DraftShift = {
+      date: input.date,
+      profileId: profile.id,
+      roundToDollar: input.roundToDollar,
+      totalTips: input.totalTips,
+      netSales: input.netSales,
+      foodSales: input.foodSales,
+      team: input.team.map((m) => ({ ...m })),
+      missingRoleHandling: input.missingRoleHandling,
+      typed: {},
+      editingShiftId: shift.id,
+    };
+    if (editingNote) draft.editingNote = editingNote;
+    set({ draft });
+  },
+  setWeekStartsOn: (day) => {
+    set((s) => ({ settings: { ...s.settings, weekStartsOn: day } }));
+    persistQuietly(get().db, (db) => repo.setSetting(db, 'weekStartsOn', day));
   },
 
   // --- profiles --------------------------------------------------------------
@@ -434,7 +506,23 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
   },
 
   // --- settings --------------------------------------------------------------
-  setDefaultProfile: (profileId) => get().setProfile(profileId),
+  setDefaultProfile: (profileId) => {
+    if (!get().draft.editingShiftId) {
+      get().setProfile(profileId);
+      return;
+    }
+    // While a saved shift is being edited, change the default without touching that draft.
+    set((s) => ({ settings: { ...s.settings, defaultProfileId: profileId } }));
+    persistQuietly(get().db, (db) => repo.setSetting(db, 'defaultProfileId', profileId));
+  },
+  setDefaultRoundToDollar: (on) => {
+    if (!get().draft.editingShiftId) {
+      get().setRoundToDollar(on);
+      return;
+    }
+    set((s) => ({ settings: { ...s.settings, defaultRoundToDollar: on } }));
+    persistQuietly(get().db, (db) => repo.setSetting(db, 'defaultRoundToDollar', on));
+  },
   setWholeDollarShares: (on) => {
     set((s) => ({ settings: { ...s.settings, wholeDollarShares: on } }));
     persistQuietly(get().db, (db) => repo.setSetting(db, 'wholeDollarShares', on));

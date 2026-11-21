@@ -1,3 +1,4 @@
+import { format } from 'date-fns';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -11,12 +12,15 @@ import {
   Input,
   Muted,
   Screen,
+  Segmented,
   Title,
   ToggleRow,
 } from '@/components/ui';
 import type { Coworker } from '@/db/repositories';
 import type { RoleId, TipOutProfile } from '@/engine/types';
-import { profileSummary, roleNames } from '@/lib/profiles';
+import { shareCsv } from '@/export/shareCsv';
+import { payoutsCsv, shiftsCsv } from '@/lib/csv';
+import { profileSummary, roleLabelFrom, roleNames } from '@/lib/profiles';
 import { useShiftStore } from '@/store/shiftStore';
 import { font, MIN_TAP, radius, spacing, useColors } from '@/theme';
 
@@ -120,7 +124,28 @@ export default function SettingsScreen() {
   const profiles = useShiftStore((s) => s.profiles);
   const settings = useShiftStore((s) => s.settings);
   const coworkers = useShiftStore((s) => s.coworkers);
-  const { setRoundToDollar, setDefaultProfile, setWholeDollarShares } = useShiftStore.getState();
+  const savedShifts = useShiftStore((s) => s.savedShifts);
+  const { setDefaultRoundToDollar, setDefaultProfile, setWholeDollarShares, setWeekStartsOn } =
+    useShiftStore.getState();
+  const [exporting, setExporting] = useState<'shifts' | 'payouts' | null>(null);
+
+  const exportCsv = async (kind: 'shifts' | 'payouts') => {
+    setExporting(kind);
+    try {
+      const stamp = format(new Date(), 'yyyy-MM-dd');
+      const csv =
+        kind === 'shifts'
+          ? shiftsCsv(savedShifts, {
+              profileName: (id) => profiles.find((p) => p.id === id)?.name,
+            })
+          : payoutsCsv(savedShifts, { roleLabel: roleLabelFrom(profiles) });
+      await shareCsv(`tipjar-${kind}-${stamp}.csv`, csv);
+    } catch (e) {
+      showError('Could not export', e);
+    } finally {
+      setExporting(null);
+    }
+  };
 
   // Every role any profile tips out (custom ones included), for coworkers' usual role.
   const roles: RoleId[] = ['bartender'];
@@ -159,7 +184,7 @@ export default function SettingsScreen() {
           label="Round to nearest dollar"
           hint="Rounds down — tip-out never exceeds your tips"
           value={settings.defaultRoundToDollar}
-          onValueChange={setRoundToDollar}
+          onValueChange={setDefaultRoundToDollar}
         />
         <ToggleRow
           label="Whole-dollar shares for each person"
@@ -183,6 +208,43 @@ export default function SettingsScreen() {
             hint: p.appliesTo === 'bartender' ? 'Bartender' : 'Server',
           }))}
         />
+        <Body style={{ fontWeight: '600' }}>Week starts on</Body>
+        <Segmented
+          accessibilityLabel="Week starts on"
+          value={settings.weekStartsOn === 1 ? 'monday' : 'sunday'}
+          onChange={(v) => setWeekStartsOn(v === 'monday' ? 1 : 0)}
+          options={[
+            { value: 'sunday', label: 'Sunday' },
+            { value: 'monday', label: 'Monday' },
+          ]}
+        />
+      </Card>
+
+      <Card>
+        <Title>Export data (CSV)</Title>
+        <Muted>
+          Makes a spreadsheet file and opens the share sheet. Nothing leaves your phone unless you
+          send it somewhere.
+        </Muted>
+        <View style={styles.buttons}>
+          <Button
+            variant="secondary"
+            label={exporting === 'shifts' ? 'Exporting…' : 'Shifts'}
+            accessibilityHint="Exports one row per saved shift"
+            onPress={() => exportCsv('shifts')}
+            disabled={exporting !== null || savedShifts.length === 0}
+            style={{ flex: 1 }}
+          />
+          <Button
+            variant="secondary"
+            label={exporting === 'payouts' ? 'Exporting…' : 'Payouts'}
+            accessibilityHint="Exports one row per person or role paid"
+            onPress={() => exportCsv('payouts')}
+            disabled={exporting !== null || savedShifts.length === 0}
+            style={{ flex: 1 }}
+          />
+        </View>
+        {savedShifts.length === 0 ? <Muted>Save a shift first.</Muted> : null}
       </Card>
 
       <Card>
