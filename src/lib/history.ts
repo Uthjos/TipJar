@@ -80,6 +80,19 @@ export function inRange(date: string, range: PeriodRange): boolean {
   return date >= range.from && date <= range.to;
 }
 
+/**
+ * The History heading for a range: `range.label` without the year when the whole week or month
+ * is in `today`'s year ("Nov 15 – 21", "November"). Year ranges and weeks that span two years
+ * keep their full label. `periodRange` labels are unchanged (review round 7, #81).
+ */
+export function displayPeriodLabel(range: PeriodRange, today: string): string {
+  if (range.period === 'year') return range.label;
+  const year = today.slice(0, 4);
+  if (range.from.slice(0, 4) !== year || range.to.slice(0, 4) !== year) return range.label;
+  const suffix = range.period === 'week' ? `, ${year}` : ` ${year}`;
+  return range.label.endsWith(suffix) ? range.label.slice(0, -suffix.length) : range.label;
+}
+
 export interface HistorySummary {
   shiftCount: number;
   earned: Cents;

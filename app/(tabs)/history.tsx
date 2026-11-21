@@ -8,7 +8,14 @@ import { formatCents } from '@/engine/money';
 import type { RoleId } from '@/engine/types';
 import { userEarnings } from '@/lib/earnings';
 import { formatShiftDate } from '@/lib/format';
-import { inRange, type Period, periodRange, shiftPeriod, summarize } from '@/lib/history';
+import {
+  displayPeriodLabel,
+  inRange,
+  type Period,
+  periodRange,
+  shiftPeriod,
+  summarize,
+} from '@/lib/history';
 import { roleLabelFrom } from '@/lib/profiles';
 import { todayIso, useShiftStore } from '@/store/shiftStore';
 import { font, MIN_TAP, radius, spacing, useColors } from '@/theme';
@@ -83,6 +90,8 @@ export default function HistoryScreen() {
 
   const range = periodRange(period, anchor, weekStartsOn);
   const atCurrent = range.to >= today();
+  // #81: drop the year from week / month headings in the current year.
+  const heading = displayPeriodLabel(range, today());
   const roleLabel = roleLabelFrom(profiles);
   const summary = summarize(saved, range, { weekStartsOn, roleLabel });
   // listShifts order: newest date first, then newest save.
@@ -109,7 +118,7 @@ export default function HistoryScreen() {
         />
         <View style={styles.stepRow}>
           <StepButton label={`Previous ${period}`} glyph="‹" onPress={() => step(-1)} />
-          <Title>{range.label}</Title>
+          <Title>{heading}</Title>
           <StepButton
             label={`Next ${period}`}
             glyph="›"
@@ -121,9 +130,7 @@ export default function HistoryScreen() {
 
       {summary.shiftCount === 0 ? (
         <Card>
-          <Body>
-            {atCurrent ? `No shifts this ${period} yet.` : `No shifts in ${range.label}.`}
-          </Body>
+          <Body>{atCurrent ? `No shifts this ${period} yet.` : `No shifts in ${heading}.`}</Body>
           <Muted>Shifts you save show up here.</Muted>
         </Card>
       ) : (

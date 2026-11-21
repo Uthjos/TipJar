@@ -107,3 +107,66 @@ retained, rounding_adjustment, kept_change, rounded_to_dollar, shift_id`
 - `updateShift` (M4) is used for edits; `savedAt` unchanged; History reloads after save / delete.
 - Settings: `weekStartsOn` persisted like the other settings.
 - No schema change.
+
+## Decisions (main-branch review, round 7)
+
+Recorded by the Maintainer when merging `feat/m7-history` and `test/m7-history`. Numbers refer to
+docs/test-findings.md. Details are in docs/review-log.md.
+
+### Dates and labels
+
+- **#90 — today is the local date:**
+  - "Today", used for the current period, the next-button limit and the New Shift default, is `todayIso() = format(new Date(), 'yyyy-MM-dd')` from date-fns, the **local** date.
+  - It is never derived from `toISOString()`.
+  - Tested by setting the system clock to local 23:30 and 00:15.
+- **#81 — headings:**
+  - `periodRange` labels always include the year, as specified.
+  - The History screen heading uses `displayPeriodLabel(range, today)`. It drops the year from week and month labels when the whole range is in the current year: "Nov 15 – 21", "November".
+  - Year ranges, and weeks spanning two years, keep the full label.
+
+### Summary
+
+- **#82 — average:** `averageEarned` is per shift (`Math.floor(earned / shiftCount + 0.5)`, half-up). A per-hour figure would need a "my hours" field and is not in v1.
+- **#83 — "Where your tip-outs went":** lists only money that left the user, meaning paid role amounts and member amounts. These are excluded:
+  - retained shares;
+  - `roundingAdjustment`;
+  - `keptChange`;
+  - the bar's `keptSplit`.
+
+  As a result, `sum(byRole) = tippedOut`. Kitchen appears in `byRole` and never in `byCoworker`.
+
+- **#84 — `byCoworker`:**
+  - Shifts are processed in date then `savedAt` order, so the result doesn't depend on input order.
+  - `name` is the most recent spelling. `roles` are listed in first-seen order.
+  - `shifts` counts each shift **once** per person: a person in two roles on one shift counts once, with both roles.
+  - A shift counts when the person appears as a member of a paid role, even if their own share that shift was $0.
+  - People whose total is $0 are omitted.
+- **#89 — edited shifts:** they belong to the period of their (possibly edited) `input.date`, and keep their original `savedAt` position within that date.
+- **#92 — `isUser` members:** `sum(byCoworker) + memberless role amounts = tippedOut` holds only when no `isUser` member is paid in a tip-out role. `isUser` members are skipped in `byCoworker`.
+
+### CSV
+
+- **#88 — formula injection:**
+  - `csvEscape` prefixes `'` on **string** values starting with `=`, `+`, `-` or `@`.
+  - Numbers are never prefixed. Money and hours cells bypass `csvEscape` entirely, so `-0.05` stays as it is.
+  - Apart from that prefix, every string round-trips.
+- **#87 — BOM:** the UTF-8 BOM is added only by the file writer (`src/export/shareCsv.ts`). The pure builders `shiftsCsv` and `payoutsCsv` never emit one. Decimals stay `.`.
+- **#85 — `payoutsCsv` rows** (the implementer's rules):
+
+  | `kind`      | When it appears                                         | `name`        |
+  | ----------- | ------------------------------------------------------- | ------------- |
+  | `paid`      | one row per member of a paid role, even at $0           | the member    |
+  | `role`      | one row per memberless role such as kitchen, even at $0 | blank         |
+  | `retained`  | a missing role's kept share, only when > 0              | blank         |
+  | `bar_split` | one row per `keptSplit` entry, including the user       | the bartender |
+  - The `role` column holds the label: from current profiles via `roleLabelFrom`, or the built-in label by default.
+  - Within a shift, rows come in profile rule order (members in team order), then `bar_split`.
+  - Each shift's `paid` + `role` rows sum to `tipped_out`.
+
+- **#86 — reconciliation:** the payouts file doesn't sum to total tips, because kept money (`kept_change`, the rounding trim and held-back dollars) has no payout row. The shifts file is the reconciliation view.
+- **#91 — hours:** the hours cell is blank when hours are 0 or weren't entered. Otherwise it shows up to 2 decimals.
+
+### UI
+
+- **Editing a shift:** switching tabs mid-edit keeps the edit in progress. This is accepted. The banner with **Cancel edit** is the way out.
+- **Chart:** chart bars can't be focused individually. This is a known limitation, to be revisited in M9 (accessibility).

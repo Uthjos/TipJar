@@ -128,11 +128,26 @@ describe('csvEscape', () => {
     expect(csvEscape(-5)).toBe('-5');
   });
 
-  it('any string round-trips through the parser as a single field', () => {
+  // Review round 7 (#88): a text value starting with = + - or @ gets a leading ' so spreadsheets
+  // don't run it as a formula. Numbers are never prefixed (see above).
+  it.each([
+    ['=SUM(A1)', "'=SUM(A1)"],
+    ['+1', "'+1"],
+    ['-5', "'-5"],
+    ['@cmd', "'@cmd"],
+    ['=a,b', `"'=a,b"`],
+    ['a=b', 'a=b'],
+  ])('formula-looking text %p -> %p', (input, expected) => {
+    expect(csvEscape(input)).toBe(expected);
+  });
+
+  it("any string round-trips through the parser as a single field (formula text gets a ' prefix)", () => {
+    // #88: the only change to the value is the ' prefix on text starting with = + - or @.
+    const expected = (s: string) => (/^[=+\-@]/.test(s) ? `'${s}` : s);
     fc.assert(
       fc.property(fc.string({ maxLength: 20 }), fc.string({ maxLength: 20 }), (a, b) => {
         const line = `${csvEscape(a)},${csvEscape(b)}\r\n`;
-        expect(parseCsv(line)).toEqual([[a, b]]);
+        expect(parseCsv(line)).toEqual([[expected(a), expected(b)]]);
       }),
       { seed: 20261121, numRuns: 500 },
     );
